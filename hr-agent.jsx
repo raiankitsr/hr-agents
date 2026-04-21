@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { collection, getDocs, setDoc, doc, deleteDoc } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, limit } from "firebase/firestore";
 import { db } from "./firebase";
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@300;400;500&display=swap');`;
@@ -175,16 +175,63 @@ button{cursor:pointer;font-family:var(--sans)}
 @keyframes bl{0%,100%{opacity:1}50%{opacity:0}}
 .slbl{font-size:11px;font-weight:600;letter-spacing:.5px;color:var(--t3);text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .slbl::after{content:'';flex:1;height:1px;background:var(--b1)}
+
+.hlist{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto;padding-right:2px}
+.hempty{text-align:center;padding:28px 10px;font-size:11px;font-family:var(--mono);color:var(--t4);line-height:1.7}
+.hitem{background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s,background .15s;display:flex;flex-direction:column;gap:5px}
+.hitem:hover{border-color:var(--b2);background:var(--s3)}
+.hitem.ok{border-left:2px solid var(--green)}
+.hitem.err{border-left:2px solid var(--red)}
+.hi-row{display:flex;align-items:center;gap:8px}
+.hi-co{flex:1;font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hi-time{font-size:10px;color:var(--t4);font-family:var(--mono);flex-shrink:0}
+.hi-sub{font-size:11px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.hi-email{font-size:10px;font-family:var(--mono);color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hi-meta{display:flex;align-items:center;gap:8px;font-size:10px;font-family:var(--mono);color:var(--t4);margin-top:1px}
+.hi-att{color:var(--blue)}
+.hi-clr{background:none;border:none;color:var(--t4);font-size:10px;font-family:var(--mono);cursor:pointer;padding:0;transition:color .15s}
+.hi-clr:hover{color:var(--red)}
+
+.wa-qr{display:flex;justify-content:center;padding:10px}
+.wa-qr img{border-radius:10px;border:1px solid var(--b1)}
+.wa-sts{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);padding:8px 11px;border-radius:8px;border:1px solid}
+.wa-sts.ready{background:var(--green-dim);border-color:rgba(63,185,80,.3);color:var(--green)}
+.wa-sts.off{background:var(--s2);border-color:var(--b1);color:var(--t4)}
+.wa-sts.wait{background:var(--amber-dim);border-color:rgba(227,179,65,.25);color:var(--amber)}
+.wa-btn{width:100%;padding:10px;border-radius:var(--r);font-family:var(--sans);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:7px;transition:all .2s}
+.wa-connect{background:var(--green-dim);border:1px solid rgba(63,185,80,.35);color:var(--green)}
+.wa-connect:hover{background:rgba(63,185,80,.22);border-color:var(--green)}
+.wa-disconnect{background:var(--red-dim);border:1px solid rgba(248,81,73,.3);color:var(--red)}
+.wa-disconnect:hover{background:rgba(248,81,73,.18);border-color:var(--red)}
+.grp-list{display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto}
+.grp-item{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:8px;cursor:pointer;transition:border-color .15s}
+.grp-item:hover{border-color:var(--b2)}
+.grp-item.watched{border-color:rgba(63,185,80,.4);background:var(--green-dim)}
+.grp-item input[type=checkbox]{accent-color:var(--green)}
+.grp-nm{flex:1;font-size:12px;font-family:var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3 !important;font-weight:500}
+
+.inbox-item{background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;transition:border-color .15s}
+.inbox-item:hover{border-color:var(--b2)}
+.inbox-item.applied{opacity:.5;border-left:2px solid var(--green)}
+.inbox-item.dismissed{opacity:.35;border-left:2px solid var(--t4)}
+.inbox-snip{font-size:10px;color:var(--t4);font-family:var(--mono);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.inbox-acts{display:flex;gap:6px;margin-top:3px}
+.inbox-apply{padding:4px 12px;border-radius:6px;border:1px solid rgba(63,185,80,.4);background:var(--green-dim);color:var(--green);font-size:10px;font-family:var(--mono);font-weight:600;cursor:pointer;transition:all .15s}
+.inbox-apply:hover{background:rgba(63,185,80,.22);border-color:var(--green)}
+.inbox-dismiss{padding:4px 10px;border-radius:6px;border:1px solid var(--b1);background:var(--s3);color:var(--t4);font-size:10px;font-family:var(--mono);cursor:pointer;transition:all .15s}
+.inbox-dismiss:hover{color:var(--red);border-color:rgba(248,81,73,.3)}
 `;
 
 const fmtSize = b => b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(1) + " MB";
 const fileEmoji = n => { const e = n.split(".").pop().toLowerCase(); if (e === "pdf") return "📄"; if (["doc", "docx"].includes(e)) return "📝"; if (["jpg", "jpeg", "png", "gif", "webp"].includes(e)) return "🖼️"; return "📎"; };
 let TID = 10;
 
+// API base resolves from Vite env at build time; empty string => same-origin relative URLs.
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
 export default function HRAgent({ user, onSignOut }) {
   const [profile, setProfile] = useState({ name: "", replyTo: "", about: "" });
-  const [serverUrl, setServerUrl] = useState("http://localhost:3001");
-  const [serverStatus, setServerStatus] = useState("idle"); // idle | checking | ok | err
+  const [serverReady, setServerReady] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [drag, setDrag] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
@@ -196,16 +243,33 @@ export default function HRAgent({ user, onSignOut }) {
   const [progressLabel, setProgressLabel] = useState("");
   const [previewRec, setPreviewRec] = useState(null);
   const [toast, setToast] = useState(null);
-  const [sideTab, setSideTab] = useState("profile");
   const [savedBadge, setSavedBadge] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [sideTab, setSideTab] = useState("profile");
+  const [history, setHistory] = useState([]);
+  const [historyPreview, setHistoryPreview] = useState(null);
+  const [failedMails, setFailedMails] = useState([]);
+  const [inboxPreview, setInboxPreview] = useState(null);
+  const [waStatus, setWaStatus] = useState({ status: "idle", qrDataUrl: null, watchedGroups: [], inboxCount: 0 });
+  const [waGroups, setWaGroups] = useState([]);
+  const [waInbox, setWaInbox] = useState([]);
+  const [waLoading, setWaLoading] = useState(false);
+  const [waSelectedGroup, setWaSelectedGroup] = useState(null);
+  const [waRoleFilter, setWaRoleFilter] = useState("");
+  const [waProcessing, setWaProcessing] = useState(false);
   const fileRef = useRef();
   const toastRef = useRef();
 
   useEffect(() => {
     (async () => {
       try { const p = await window.storage.get("hr_profile"); if (p) setProfile(JSON.parse(p.value)); } catch { }
-      try { const s = await window.storage.get("hr_server"); if (s) setServerUrl(s.value); } catch { }
+
+      // Ping backend once on boot to toggle header status
+      try {
+        const res = await fetch(`${API_BASE}/`, { signal: AbortSignal.timeout(4000) });
+        const data = await res.json();
+        setServerReady(data?.status === "ok");
+      } catch { setServerReady(false); }
 
       // Load user's persisted attachments from Firestore (avoids Storage CORS listAll)
       if (user) {
@@ -217,11 +281,62 @@ export default function HRAgent({ user, onSignOut }) {
         } catch (err) {
           console.error("Firestore load error:", err);
         }
+
+        // Load send history, newest first
+        try {
+          const hRef = collection(db, "users", user.uid, "history");
+          const hSnap = await getDocs(query(hRef, orderBy("sentAt", "desc"), limit(200)));
+          setHistory(hSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (err) {
+          console.error("History load error:", err);
+        }
       }
 
       setLoaded(true);
     })();
   }, [user]);
+
+  const recordHistory = async (rec, status, errorMsg) => {
+    const entry = {
+      sentAt: Date.now(),
+      email: rec.email,
+      company: rec.company || "",
+      jobTitle: rec.jobTitle || "",
+      subject: rec.subject || "",
+      body: rec.body || "",
+      note: rec.note || "",
+      status, // "sent" | "failed"
+      error: errorMsg || "",
+      attachments: attachments.map(a => ({ name: a.name, filename: a.filename })),
+    };
+    const id = `${entry.sentAt}-${Math.random().toString(36).slice(2, 8)}`;
+    setHistory(p => [{ id, ...entry }, ...p]);
+    if (user) {
+      try { await setDoc(doc(db, "users", user.uid, "history", id), entry); }
+      catch (err) { console.error("History save error:", err); }
+    }
+  };
+
+  const clearHistory = async () => {
+    if (!confirm("Clear all history? This cannot be undone.")) return;
+    const snapshot = history;
+    setHistory([]);
+    if (user) {
+      try {
+        await Promise.all(snapshot.map(h => deleteDoc(doc(db, "users", user.uid, "history", h.id))));
+      } catch (err) { console.error("History clear error:", err); }
+    }
+    showToast("History cleared", "ok");
+  };
+
+  const fmtRelTime = (ts) => {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
+    return new Date(ts).toLocaleDateString();
+  };
 
   const showToast = (msg, type = "inf") => {
     setToast({ msg, type });
@@ -232,23 +347,9 @@ export default function HRAgent({ user, onSignOut }) {
   const saveProfile = async () => {
     try {
       await window.storage.set("hr_profile", JSON.stringify(profile));
-      await window.storage.set("hr_server", serverUrl);
       setSavedBadge(true); showToast("Profile saved", "ok");
       setTimeout(() => setSavedBadge(false), 2500);
     } catch { showToast("Save failed", "err"); }
-  };
-
-  const testServer = async () => {
-    setServerStatus("checking");
-    try {
-      const res = await fetch(serverUrl.replace(/\/$/, "") + "/", { signal: AbortSignal.timeout(4000) });
-      const data = await res.json();
-      if (data.status === "ok") { setServerStatus("ok"); showToast("Server connected ✓", "ok"); }
-      else { setServerStatus("err"); showToast("Unexpected response", "err"); }
-    } catch {
-      setServerStatus("err");
-      showToast("Cannot reach server — is it running?", "err");
-    }
   };
 
   const handleFiles = useCallback(async (filesArg) => {
@@ -263,7 +364,7 @@ export default function HRAgent({ user, onSignOut }) {
       try {
         const formData = new FormData();
         formData.append("file", file);
-        const upRes = await fetch(serverUrl.replace(/\/$/, "") + "/upload", {
+        const upRes = await fetch(`${API_BASE}/upload`, {
           method: "POST",
           body: formData,
         });
@@ -294,6 +395,128 @@ export default function HRAgent({ user, onSignOut }) {
     showToast(`${uploaded.length} file${uploaded.length > 1 ? 's' : ''} uploaded`, "ok");
   }, [attachments, user]);
 
+  // ── WhatsApp helpers ─────────────────────────────────────────────
+  const waFetch = async (path, opts) => {
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    return res.json();
+  };
+
+  const pollWaStatus = useCallback(async () => {
+    try {
+      const s = await waFetch("/wa/status");
+      setWaStatus(s);
+      if (s.inboxCount > 0) {
+        const { inbox } = await waFetch("/wa/inbox");
+        setWaInbox(inbox || []);
+      }
+    } catch { }
+  }, []);
+
+  // Poll WA status every 15s when the WhatsApp or Inbox tab is open
+  useEffect(() => {
+    if (sideTab !== "whatsapp" && sideTab !== "inbox") return;
+    pollWaStatus();
+    const iv = setInterval(pollWaStatus, 15000);
+    return () => clearInterval(iv);
+  }, [sideTab, pollWaStatus]);
+
+  // Auto-load groups when WA becomes ready
+  useEffect(() => {
+    if (waStatus.status === "ready" && waGroups.length === 0) waLoadGroups();
+  }, [waStatus.status]);
+
+  const waConnect = async () => {
+    setWaLoading(true);
+    try {
+      const s = await waFetch("/wa/start", { method: "POST" });
+      setWaStatus(s);
+      // QR takes a moment; poll quickly
+      setTimeout(pollWaStatus, 2000);
+      setTimeout(pollWaStatus, 5000);
+    } catch (e) { showToast("WA connect failed: " + e.message, "err"); }
+    setWaLoading(false);
+  };
+
+  const waDisconnect = async () => {
+    setWaLoading(true);
+    try {
+      await waFetch("/wa/logout", { method: "POST" });
+      setWaStatus({ status: "idle", qrDataUrl: null, watchedGroups: [], inboxCount: 0 });
+      setWaGroups([]);
+      setWaInbox([]);
+    } catch (e) { showToast("WA disconnect failed: " + e.message, "err"); }
+    setWaLoading(false);
+  };
+
+  const waLoadGroups = async () => {
+    try {
+      const { groups } = await waFetch("/wa/groups");
+      setWaGroups(groups || []);
+    } catch (e) { showToast("Failed to load groups: " + e.message, "err"); }
+  };
+
+  const waToggleGroup = async (groupId) => {
+    const current = waStatus.watchedGroups || [];
+    const next = current.includes(groupId)
+      ? current.filter(id => id !== groupId)
+      : [...current, groupId];
+    try {
+      const { watchedGroups } = await waFetch("/wa/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupIds: next }),
+      });
+      setWaStatus(p => ({ ...p, watchedGroups }));
+      setWaGroups(g => g.map(grp => ({ ...grp, watched: watchedGroups.includes(grp.id) })));
+    } catch (e) { showToast("Failed: " + e.message, "err"); }
+  };
+
+  const waProcessGroup = async () => {
+    if (!waSelectedGroup) return;
+    setWaProcessing(true);
+    try {
+      const result = await waFetch("/wa/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupId: waSelectedGroup.id, role: waRoleFilter }),
+      });
+      showToast(`Scanned ${result.processed} messages, found ${result.found} new email(s)`, "ok");
+      // Refresh inbox
+      const { inbox } = await waFetch("/wa/inbox");
+      setWaInbox(inbox || []);
+      if (result.found > 0) setSideTab("inbox");
+    } catch (e) {
+      showToast("Process failed: " + e.message, "err");
+    }
+    setWaProcessing(false);
+  };
+
+  const inboxApply = async (item) => {
+    await waFetch(`/wa/inbox/${item.id}/apply`, { method: "POST" });
+    // Remove from inbox — it goes to recipients, then history on send
+    setWaInbox(p => p.filter(x => x.id !== item.id));
+    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet?.slice(0, 120) || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude" };
+    setRecipients(p => [...p, newRec]);
+    showToast(`Added ${item.email} to recipients`, "ok");
+  };
+
+  const inboxDismiss = async (id) => {
+    await waFetch(`/wa/inbox/${id}/dismiss`, { method: "POST" });
+    setWaInbox(p => p.filter(x => x.id !== id));
+  };
+
+  const inboxApplyAll = async () => {
+    const pending = waInbox.filter(x => x.status === "pending");
+    if (!pending.length) return;
+    for (const item of pending) {
+      await inboxApply(item);
+    }
+    showToast(`Added ${pending.length} recipients`, "ok");
+  };
+
+  const pendingInboxCount = waInbox.filter(x => x.status === "pending").length;
+  const failedCount = failedMails.filter(r => r.status === "failed").length;
+
   const upd = (id, k, v) => setRecipients(p => p.map(r => r.id === id ? { ...r, [k]: v } : r));
   const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude" }]);
   const rmRec = id => setRecipients(p => p.filter(r => r.id !== id));
@@ -315,7 +538,7 @@ Write email body (150-220 words). Be warm, confident, professional. Reference ro
 Respond ONLY with valid JSON (no markdown):
 {"subject":"...","body":"..."}`;
 
-    const res = await fetch(serverUrl.replace(/\/$/, "") + "/generate", {
+    const res = await fetch(`${API_BASE}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, modelType: rec.preferAi }),
@@ -328,8 +551,7 @@ Respond ONLY with valid JSON (no markdown):
   };
 
   const sendViaServer = async (rec) => {
-    const base = serverUrl.replace(/\/$/, "");
-    const res = await fetch(`${base}/send`, {
+    const res = await fetch(`${API_BASE}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -338,6 +560,7 @@ Respond ONLY with valid JSON (no markdown):
         body: rec.body,
         fromName: profile.name || undefined,
         replyTo: profile.replyTo || undefined,
+        attachments: attachments.map(a => ({ name: a.name, filename: a.filename })),
       }),
     });
     const data = await res.json();
@@ -355,15 +578,49 @@ Respond ONLY with valid JSON (no markdown):
     window.open(url, "_blank");
   };
 
+  const retryOne = async (r) => {
+    setFailedMails(p => p.map(f => f.id === r.id ? { ...f, status: "retrying" } : f));
+    try {
+      const result = await generateEmail(r);
+      const merged = { ...r, subject: result.subject, body: result.body };
+      await sendViaServer(merged);
+      showToast(`Sent → ${r.email}`, "ok");
+      recordHistory(merged, "sent");
+      setFailedMails(p => p.filter(f => f.id !== r.id));
+    } catch (e) {
+      setFailedMails(p => p.map(f => f.id === r.id ? { ...f, status: "failed", error: e.message } : f));
+      showToast(`Retry failed: ${e.message}`, "err");
+    }
+  };
+
+  const retryAllFailed = async () => {
+    const toRetry = failedMails.filter(r => r.status === "failed");
+    if (!toRetry.length) return;
+    setRunning(true);
+    for (let i = 0; i < toRetry.length; i++) {
+      setProgressLabel(`Retrying ${i + 1}/${toRetry.length}...`);
+      setProgress(Math.round(((i + 1) / toRetry.length) * 100));
+      await retryOne(toRetry[i]);
+      if (i < toRetry.length - 1) await new Promise(r => setTimeout(r, 500));
+    }
+    setProgressLabel("Complete");
+    setRunning(false);
+  };
+
   const sendOne = async (r) => {
     upd(r.id, "status", "sending");
     try {
       await sendViaServer(r);
-      upd(r.id, "status", "sent");
       showToast(`Sent → ${r.email}`, "ok");
+      recordHistory(r, "sent");
+      // Remove from recipients on success
+      setRecipients(p => p.filter(x => x.id !== r.id));
     } catch (e) {
-      upd(r.id, "status", "done");
       showToast(`Failed: ${e.message}`, "err");
+      recordHistory(r, "failed", e.message);
+      // Move to failed list
+      setFailedMails(p => [...p, { ...r, status: "failed", error: e.message, failedAt: Date.now() }]);
+      setRecipients(p => p.filter(x => x.id !== r.id));
     }
   };
 
@@ -390,19 +647,19 @@ Respond ONLY with valid JSON (no markdown):
       }
 
       // Step 2: Send via backend
-      if (serverStatus === "ok") {
-        setProgressLabel(`Sending to ${valid[i].email}...`);
-        setRecipients(p => p.map(r => r.id === id ? { ...r, status: "sending" } : r));
-        try {
-          await sendViaServer({ ...valid[i], subject: result.subject, body: result.body });
-          setRecipients(p => p.map(r => r.id === id ? { ...r, status: "sent" } : r));
-          showToast(`Sent → ${valid[i].email}`, "ok");
-        } catch (e) {
-          setRecipients(p => p.map(r => r.id === id ? { ...r, status: "done" } : r));
-          showToast(`Send failed for ${valid[i].email}: ${e.message}`, "err");
-        }
-      } else {
-        setRecipients(p => p.map(r => r.id === id ? { ...r, status: "done" } : r));
+      setProgressLabel(`Sending to ${valid[i].email}...`);
+      setRecipients(p => p.map(r => r.id === id ? { ...r, status: "sending" } : r));
+      const mergedRec = { ...valid[i], subject: result.subject, body: result.body };
+      try {
+        await sendViaServer(mergedRec);
+        showToast(`Sent → ${valid[i].email}`, "ok");
+        recordHistory(mergedRec, "sent");
+        setRecipients(p => p.filter(r => r.id !== id));
+      } catch (e) {
+        showToast(`Send failed for ${valid[i].email}: ${e.message}`, "err");
+        recordHistory(mergedRec, "failed", e.message);
+        setFailedMails(p => [...p, { ...mergedRec, id, status: "failed", error: e.message, failedAt: Date.now() }]);
+        setRecipients(p => p.filter(r => r.id !== id));
       }
 
       setProgress(Math.round(((i + 1) / valid.length) * 100));
@@ -434,8 +691,8 @@ Respond ONLY with valid JSON (no markdown):
             <div className="tb-sub">ai-powered · direct send · professional</div>
           </div>
           <div className="tb-st">
-            <div className={`pip ${running ? "busy" : serverStatus === "err" ? "err" : ""}`} />
-            {running ? "processing..." : serverStatus === "ok" ? "server connected" : serverStatus === "err" ? "server offline" : "ready"}
+            <div className={`pip ${running ? "busy" : serverReady ? "" : "err"}`} />
+            {running ? "processing..." : serverReady ? "ready" : "server offline"}
             {user && (<>
               <span style={{ color: "var(--b2)", margin: "0 4px" }}>|</span>
               {user.photoURL && <img src={user.photoURL} alt="" style={{ width: 22, height: 22, borderRadius: "50%", border: "1px solid var(--b2)", flexShrink: 0 }} />}
@@ -453,7 +710,16 @@ Respond ONLY with valid JSON (no markdown):
           <div className="sb">
             <div className="tabs">
               <button className={`tab ${sideTab === "profile" ? "on" : ""}`} onClick={() => setSideTab("profile")}>Profile</button>
-              <button className={`tab ${sideTab === "server" ? "on" : ""}`} onClick={() => setSideTab("server")}>Server</button>
+              <button className={`tab ${sideTab === "whatsapp" ? "on" : ""}`} onClick={() => setSideTab("whatsapp")}>WA</button>
+              <button className={`tab ${sideTab === "inbox" ? "on" : ""}`} onClick={() => setSideTab("inbox")}>
+                Inbox{pendingInboxCount > 0 && ` · ${pendingInboxCount}`}
+              </button>
+              <button className={`tab ${sideTab === "failed" ? "on" : ""}`} onClick={() => setSideTab("failed")}>
+                Failed{failedCount > 0 && ` · ${failedCount}`}
+              </button>
+              <button className={`tab ${sideTab === "history" ? "on" : ""}`} onClick={() => setSideTab("history")}>
+                History{history.length > 0 && ` · ${history.length}`}
+              </button>
             </div>
 
             {sideTab === "profile" && (
@@ -472,47 +738,261 @@ Respond ONLY with valid JSON (no markdown):
               </div>
             )}
 
-            {sideTab === "server" && (
+            {sideTab === "failed" && (
               <div className="panel">
                 <div className="ph">
-                  <span className="pt">Backend Server</span>
-                  {serverStatus === "ok" && <span className="pbadge ok">Connected</span>}
-                  {serverStatus === "err" && <span className="pbadge err">Offline</span>}
+                  <span className="pt">Failed</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {failedCount > 0 && (
+                      <button className="inbox-apply" onClick={retryAllFailed} disabled={running} style={{ fontSize: 9, padding: "3px 8px", background: "var(--red-dim)", borderColor: "rgba(248,81,73,.3)", color: "var(--red)" }}>
+                        ↻ Retry All ({failedCount})
+                      </button>
+                    )}
+                    {failedMails.length > 0 && (
+                      <button className="hi-clr" onClick={() => setFailedMails([])}>Clear</button>
+                    )}
+                  </div>
                 </div>
                 <div className="pb">
-                  <div className="srv-note">
-                    <b>Setup:</b> run the Node.js server locally<br />
-                    then connect it here to enable direct send.
-                  </div>
-
-                  {serverStatus === "ok" && (
-                    <div className="srv-st ok">✓ Server reachable — direct send enabled</div>
-                  )}
-                  {serverStatus === "err" && (
-                    <div className="srv-st err">✗ Cannot reach server at this URL</div>
-                  )}
-                  {serverStatus === "checking" && (
-                    <div className="srv-st chk"><span className="spin">⟳</span> Checking...</div>
-                  )}
-
-                  <div className="fl">
-                    <label className="flb">Server URL</label>
-                    <div className="srv-row">
-                      <input
-                        value={serverUrl}
-                        onChange={e => setServerUrl(e.target.value)}
-                        placeholder="http://localhost:3001"
-                        style={{ fontFamily: "var(--mono)", fontSize: 12 }}
-                      />
-                      <button className="test-btn" onClick={testServer} disabled={serverStatus === "checking"}>
-                        {serverStatus === "checking" ? <span className="spin">⟳</span> : "Test"}
-                      </button>
+                  {failedMails.length === 0 ? (
+                    <div className="hempty">
+                      No failed emails.<br />
+                      Failed sends will appear here for retry.
                     </div>
-                  </div>
+                  ) : (
+                    <div className="hlist">
+                      {failedMails.map(f => (
+                        <div key={f.id} className="inbox-item" style={{ borderLeftColor: f.status === "retrying" ? "var(--amber)" : "var(--red)", borderLeftWidth: 2 }}>
+                          <div className="hi-row">
+                            <div className="hi-co">{f.company || f.email}</div>
+                            <div className="hi-time">{fmtRelTime(f.failedAt)}</div>
+                          </div>
+                          <div className="hi-email">{f.email}</div>
+                          {f.jobTitle && <div className="hi-sub">{f.jobTitle}</div>}
+                          {f.subject && <div className="hi-sub" style={{ color: "var(--t3)" }}>{f.subject}</div>}
+                          <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--red)", lineHeight: 1.4 }}>
+                            {f.status === "retrying" ? <><span className="spin">⟳</span> Retrying...</> : `✗ ${f.error || "Send failed"}`}
+                          </div>
+                          {f.status === "failed" && (
+                            <div className="inbox-acts">
+                              <button className="inbox-apply" onClick={() => retryOne(f)} style={{ background: "var(--amber-dim)", borderColor: "rgba(227,179,65,.3)", color: "var(--amber)" }}>↻ Retry</button>
+                              <button className="inbox-dismiss" onClick={() => setFailedMails(p => p.filter(x => x.id !== f.id))}>✗ Remove</button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-                  <div className="srv-note" style={{ marginTop: 4 }}>
-                    If server is <b>offline</b>, emails are still generated — use Gmail link or Copy to send manually.
+            {sideTab === "history" && (
+              <div className="panel">
+                <div className="ph">
+                  <span className="pt">Send History</span>
+                  {history.length > 0 && (
+                    <button className="hi-clr" onClick={clearHistory}>Clear all</button>
+                  )}
+                </div>
+                <div className="pb">
+                  {history.length === 0 ? (
+                    <div className="hempty">
+                      No sends yet.<br />
+                      Every successful email will show up here.
+                    </div>
+                  ) : (
+                    <div className="hlist">
+                      {history.map(h => (
+                        <div
+                          key={h.id}
+                          className={`hitem ${h.status === "sent" ? "ok" : "err"}`}
+                          onClick={() => setHistoryPreview(h)}
+                        >
+                          <div className="hi-row">
+                            <div className="hi-co">
+                              {h.company || h.jobTitle || h.email}
+                            </div>
+                            <div className="hi-time">{fmtRelTime(h.sentAt)}</div>
+                          </div>
+                          {h.jobTitle && h.company && (
+                            <div className="hi-sub">{h.jobTitle}</div>
+                          )}
+                          <div className="hi-email">{h.email}</div>
+                          <div className="hi-meta">
+                            <span style={{ color: h.status === "sent" ? "var(--green)" : "var(--red)" }}>
+                              {h.status === "sent" ? "✓ Delivered" : "✗ Failed"}
+                            </span>
+                            {h.attachments?.length > 0 && (
+                              <span className="hi-att">📎 {h.attachments.length}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {sideTab === "whatsapp" && (
+              <div className="panel">
+                <div className="ph">
+                  <span className="pt">WhatsApp Sync</span>
+                  {waStatus.status === "ready" && <span className="pbadge ok">Connected</span>}
+                  {waStatus.status === "qr" && <span className="pbadge" style={{ color: "var(--amber)" }}>Scan QR</span>}
+                </div>
+                <div className="pb">
+                  {waStatus.status === "idle" && (
+                    <>
+                      <div className="wa-sts off">Not connected — click below to link your WhatsApp</div>
+                      <button className="wa-btn wa-connect" onClick={waConnect} disabled={waLoading}>
+                        {waLoading ? <><span className="spin">⟳</span>Connecting...</> : "Connect WhatsApp"}
+                      </button>
+                    </>
+                  )}
+
+                  {(waStatus.status === "initializing" || waStatus.status === "authenticated") && (
+                    <div className="wa-sts wait"><span className="spin">⟳</span> Initializing...</div>
+                  )}
+
+                  {waStatus.status === "qr" && waStatus.qrDataUrl && (
+                    <>
+                      <div className="wa-sts wait">Scan this QR from WhatsApp mobile</div>
+                      <div className="wa-qr"><img src={waStatus.qrDataUrl} alt="QR" width={260} height={260} /></div>
+                      <div className="flh" style={{ textAlign: "center" }}>WhatsApp → Linked Devices → Link a Device</div>
+                    </>
+                  )}
+
+                  {waStatus.status === "ready" && (
+                    <>
+                      <div className="wa-sts ready">✓ WhatsApp linked</div>
+
+                      {/* Step 1: Select group */}
+                      <div className="fl" style={{ marginTop: 6 }}>
+                        <div className="flb" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span>Select Group</span>
+                          <button className="hi-clr" onClick={waLoadGroups} style={{ color: "var(--blue)" }}>Refresh</button>
+                        </div>
+                        {waGroups.length === 0 ? (
+                          <button className="wa-btn" style={{ background: "var(--s2)", border: "1px solid var(--b1)", color: "var(--t2)" }} onClick={waLoadGroups}>
+                            Load Groups
+                          </button>
+                        ) : (
+                          <div className="grp-list">
+                            {waGroups.map(g => (
+                              <div
+                                key={g.id}
+                                className={`grp-item ${waSelectedGroup?.id === g.id ? "watched" : ""}`}
+                                onClick={() => setWaSelectedGroup(waSelectedGroup?.id === g.id ? null : g)}
+                                style={{ cursor: "pointer" }}
+                              >
+                                <div style={{ width: 8, height: 8, borderRadius: "50%", background: waSelectedGroup?.id === g.id ? "var(--green)" : "var(--b2)", flexShrink: 0, boxShadow: waSelectedGroup?.id === g.id ? "0 0 6px var(--green)" : "none" }} />
+                                <div style={{ flex: 1, fontSize: 12, color: "#e6edf3", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{g.name || "(unnamed)"}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Step 2: Role filter + Process button */}
+                      {waSelectedGroup && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6, padding: 10, background: "var(--bg)", border: "1px solid var(--b1)", borderRadius: 10 }}>
+                          <div style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--t3)" }}>
+                            Scanning: <span style={{ color: "var(--text)", fontWeight: 600 }}>{waSelectedGroup.name}</span>
+                          </div>
+                          <div className="fl">
+                            <label className="flb">Role / Keywords <span style={{ color: "var(--t4)", fontWeight: 400 }}>optional</span></label>
+                            <input
+                              value={waRoleFilter}
+                              onChange={e => setWaRoleFilter(e.target.value)}
+                              placeholder="e.g. Frontend Developer, React, SDE"
+                              style={{ fontSize: 12 }}
+                            />
+                            <div className="flh">Only messages matching these keywords will be scanned. Leave empty for all.</div>
+                          </div>
+                          <button
+                            className="wa-btn wa-connect"
+                            onClick={waProcessGroup}
+                            disabled={waProcessing}
+                            style={{ marginTop: 2 }}
+                          >
+                            {waProcessing ? <><span className="spin">⟳</span> Processing...</> : <>🔍 Process Group</>}
+                          </button>
+                        </div>
+                      )}
+
+                      <button className="wa-btn wa-disconnect" onClick={waDisconnect} disabled={waLoading} style={{ marginTop: 8 }}>
+                        {waLoading ? <><span className="spin">⟳</span>...</> : "Disconnect WhatsApp"}
+                      </button>
+                    </>
+                  )}
+
+                  {waStatus.status === "auth_failure" && (
+                    <>
+                      <div className="wa-sts" style={{ background: "var(--red-dim)", borderColor: "rgba(248,81,73,.3)", color: "var(--red)" }}>
+                        ✗ Authentication failed — try reconnecting
+                      </div>
+                      <button className="wa-btn wa-connect" onClick={waConnect} disabled={waLoading}>Reconnect</button>
+                    </>
+                  )}
+
+                  {waStatus.status === "disconnected" && (
+                    <>
+                      <div className="wa-sts off">Disconnected</div>
+                      <button className="wa-btn wa-connect" onClick={waConnect} disabled={waLoading}>Reconnect</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {sideTab === "inbox" && (
+              <div className="panel">
+                <div className="ph">
+                  <span className="pt">Inbox</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {pendingInboxCount > 0 && (
+                      <button className="inbox-apply" onClick={inboxApplyAll} style={{ fontSize: 9, padding: "3px 8px" }}>
+                        ✓ Apply All ({pendingInboxCount})
+                      </button>
+                    )}
+                    {pendingInboxCount > 0 && <span className="pbadge">{pendingInboxCount} new</span>}
                   </div>
+                </div>
+                <div className="pb">
+                  {waStatus.status !== "ready" ? (
+                    <div className="hempty">
+                      Connect WhatsApp first to start<br />
+                      receiving HR emails from group chats.
+                    </div>
+                  ) : waInbox.length === 0 ? (
+                    <div className="hempty">
+                      No emails extracted yet.<br />
+                      Watching {waStatus.watchedGroups?.length || 0} group{waStatus.watchedGroups?.length !== 1 ? "s" : ""}. New HR emails will appear here.
+                    </div>
+                  ) : (
+                    <div className="hlist">
+                      {waInbox.filter(x => x.status === "pending").map(item => (
+                        <div key={item.id} className="inbox-item" style={{ cursor: "pointer" }} onClick={e => { e.preventDefault(); e.stopPropagation(); setInboxPreview(item); }}>
+                          <div className="hi-row">
+                            <div className="hi-co">{item.company || item.jobTitle || item.email}</div>
+                            <div className="hi-time">{fmtRelTime(item.ts)}</div>
+                          </div>
+                          <div className="hi-email" style={{ pointerEvents: "none" }}>{item.email}</div>
+                          {item.jobTitle && <div className="hi-sub">{item.jobTitle}</div>}
+                          <div className="inbox-snip">{item.snippet}</div>
+                          <div style={{ fontSize: 9, fontFamily: "var(--mono)", color: "var(--t4)" }}>
+                            from: {item.groupName}
+                          </div>
+                          <div className="inbox-acts" onClick={e => e.stopPropagation()}>
+                            <button className="inbox-apply" onClick={e => { e.stopPropagation(); inboxApply(item); }}>✓ Apply</button>
+                            <button className="inbox-dismiss" onClick={e => { e.stopPropagation(); inboxDismiss(item.id); }}>✗ Skip</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -543,7 +1023,7 @@ Respond ONLY with valid JSON (no markdown):
                       try { 
                         // Try deleting from backend if filename exists
                         if (a.filename) {
-                          await fetch(serverUrl.replace(/\/$/, "") + `/upload/${a.filename}`, { method: "DELETE" });
+                          await fetch(`${API_BASE}/upload/${a.filename}`, { method: "DELETE" });
                         }
                         // Delete metadata from Firestore
                         if (user) await deleteDoc(doc(db, "users", user.uid, "attachments", a.name));
@@ -599,16 +1079,13 @@ Respond ONLY with valid JSON (no markdown):
                       <button className="sb-btn sbprev" onClick={() => setPreviewRec(r)}>👁 Preview</button>
                       <button className="sb-btn sbcopy" onClick={() => copyEmail(r)}>📋 Copy</button>
                       <button className="sb-btn sbgmail" onClick={() => openGmail(r)}>↗ Gmail</button>
-                      {r.status === "done" && serverStatus === "ok" && (
+                      {r.status === "done" && (
                         <button className="sb-btn sbsend" onClick={() => sendOne(r)}>
                           ⚡ Send Now
                         </button>
                       )}
                       {r.status === "sent" && <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--green)" }}>✓ Delivered</span>}
                     </div>
-                  )}
-                  {r.status === "error" && (
-                    <div className="rfoot"><span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--red)" }}>✗ Generation failed — check API key</span></div>
                   )}
                 </div>
               ))}
@@ -637,7 +1114,7 @@ Respond ONLY with valid JSON (no markdown):
                 </div>
               ) : (
                 <div className="pw">
-                  <div className="plbl">{validCount} recipient{validCount !== 1 ? "s" : ""} queued · {serverStatus === "ok" ? "will auto-send via server" : "connect server to auto-send"}</div>
+                  <div className="plbl">{validCount} recipient{validCount !== 1 ? "s" : ""} queued · will auto-send</div>
                   <div className="ptrk"><div className="pfil" style={{ width: `${validCount > 0 ? 10 : 0}%` }} /></div>
                 </div>
               )}
@@ -645,12 +1122,7 @@ Respond ONLY with valid JSON (no markdown):
                 <button className="rbtn" onClick={() => setRecipients(p => p.map(r => ({ ...r, status: "idle", statusMsg: "", subject: "", body: "" })))}>Reset</button>
               )}
               <button className="lbtn" disabled={running || !validCount} onClick={runAgent}>
-                {running
-                  ? <><span className="spin">⚙</span>Running...</>
-                  : serverStatus === "ok"
-                    ? <>🚀 Generate & Send</>
-                    : <>🚀 Generate Emails</>
-                }
+                {running ? <><span className="spin">⚙</span>Running...</> : <>🚀 Generate & Send</>}
               </button>
             </div>
           </div>
@@ -672,13 +1144,108 @@ Respond ONLY with valid JSON (no markdown):
             <div className="mftr">
               <button className="sb-btn sbcopy" onClick={() => copyEmail(previewRec)}>📋 Copy</button>
               <button className="sb-btn sbgmail" onClick={() => openGmail(previewRec)}>↗ Open in Gmail</button>
-              {previewRec.status !== "sent" && serverStatus === "ok" && (
+              {previewRec.status !== "sent" && (
                 <button className="msnd" onClick={async () => {
                   const snap = { ...previewRec }; setPreviewRec(null);
                   await sendOne(snap);
                 }}>⚡ Send Now</button>
               )}
               {previewRec.status === "sent" && <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--green)" }}>✓ Already sent</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {inboxPreview && (
+        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setInboxPreview(null) }}>
+          <div className="modal">
+            <div className="mhd">
+              <div className="mico">📨</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mto">
+                  HR Email: <span>{inboxPreview.email}</span>
+                </div>
+                <div className="msub">{inboxPreview.jobTitle || "Open Position"}</div>
+              </div>
+              <button className="mcls" onClick={() => setInboxPreview(null)}>×</button>
+            </div>
+            <div className="mbdy" style={{ padding: 0 }}>
+              <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+                {inboxPreview.company && (
+                  <div>
+                    <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Company</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{inboxPreview.company}</div>
+                  </div>
+                )}
+                {inboxPreview.jobTitle && (
+                  <div>
+                    <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Role</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{inboxPreview.jobTitle}</div>
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Contact Email</div>
+                  <div style={{ fontSize: 13, fontFamily: "var(--mono)", color: "var(--blue)" }}>{inboxPreview.email}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Source</div>
+                  <div style={{ fontSize: 12, color: "var(--t2)" }}>
+                    {inboxPreview.groupName} · {new Date(inboxPreview.ts).toLocaleString()}
+                    {inboxPreview.sender && <span style={{ color: "var(--t4)" }}> · by {inboxPreview.sender}</span>}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Original Message</div>
+                  <div style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--t2)", lineHeight: 1.7, whiteSpace: "pre-wrap", background: "var(--bg)", padding: 12, borderRadius: 8, border: "1px solid var(--b1)", maxHeight: 240, overflowY: "auto" }}>
+                    {inboxPreview.snippet}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mftr">
+              <button className="sb-btn sbsend" onClick={() => { inboxApply(inboxPreview); setInboxPreview(null); }}>✓ Apply</button>
+              <button className="sb-btn sbcopy" onClick={() => { inboxDismiss(inboxPreview.id); setInboxPreview(null); }}>✗ Skip</button>
+              <button className="sb-btn sbcopy" onClick={() => {
+                navigator.clipboard.writeText(`Email: ${inboxPreview.email}\nRole: ${inboxPreview.jobTitle}\nCompany: ${inboxPreview.company}\n\n${inboxPreview.snippet}`);
+                showToast("Copied to clipboard", "ok");
+              }}>📋 Copy</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {historyPreview && (
+        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setHistoryPreview(null) }}>
+          <div className="modal">
+            <div className="mhd">
+              <div className="mico">{historyPreview.status === "sent" ? "✉️" : "⚠️"}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mto">
+                  To: <span>{historyPreview.email}</span>
+                  {historyPreview.company && <> · <span>{historyPreview.company}</span></>}
+                  {historyPreview.jobTitle && <> · <span>{historyPreview.jobTitle}</span></>}
+                </div>
+                <div className="msub">{historyPreview.subject}</div>
+                <div className="mto" style={{ marginTop: 4 }}>
+                  {new Date(historyPreview.sentAt).toLocaleString()} ·{" "}
+                  <span style={{ color: historyPreview.status === "sent" ? "var(--green)" : "var(--red)" }}>
+                    {historyPreview.status === "sent" ? "✓ Delivered" : `✗ ${historyPreview.error || "Failed"}`}
+                  </span>
+                </div>
+              </div>
+              <button className="mcls" onClick={() => setHistoryPreview(null)}>×</button>
+            </div>
+            <div className="mbdy">{historyPreview.body}</div>
+            <div className="mftr">
+              {historyPreview.attachments?.length > 0 && (
+                <div style={{ flex: 1, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10, fontFamily: "var(--mono)", color: "var(--t3)" }}>
+                  📎 {historyPreview.attachments.map(a => a.name).join(", ")}
+                </div>
+              )}
+              <button className="sb-btn sbcopy" onClick={() => {
+                navigator.clipboard.writeText(`Subject: ${historyPreview.subject}\n\n${historyPreview.body}`);
+                showToast("Copied to clipboard", "ok");
+              }}>📋 Copy</button>
             </div>
           </div>
         </div>

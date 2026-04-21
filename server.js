@@ -28,9 +28,25 @@ if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 // Health check
 app.get("/", (req, res) => res.json({ status: "ok", service: "HR Outreach Agent API" }));
 
+// Resolve attachment descriptors from the client into nodemailer attachments.
+// Each item may be { filename, name } where `filename` is the server-side stored name
+// returned from /upload, and `name` is the original display name.
+function resolveAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map(a => {
+      if (!a || !a.filename) return null;
+      const safe = path.basename(a.filename);
+      const full = path.join(__dirname, "uploads", safe);
+      if (!fs.existsSync(full)) return null;
+      return { filename: a.name || safe, path: full };
+    })
+    .filter(Boolean);
+}
+
 // Send single email
 app.post("/send", async (req, res) => {
-  const { to, subject, body, replyTo, fromName } = req.body;
+  const { to, subject, body, replyTo, fromName, attachments } = req.body;
 
   if (!to || !subject || !body) {
     return res.status(400).json({ error: "Missing required fields: to, subject, body" });
@@ -51,6 +67,7 @@ app.post("/send", async (req, res) => {
       replyTo: replyTo || process.env.GMAIL_USER,
       subject,
       text: body,
+      attachments: resolveAttachments(attachments),
     });
 
     res.json({ success: true, messageId: info.messageId });
@@ -62,7 +79,8 @@ app.post("/send", async (req, res) => {
 
 // Send batch emails
 app.post("/send-batch", async (req, res) => {
-  const { emails, fromName, replyTo } = req.body;
+  const { emails, fromName, replyTo, attachments } = req.body;
+  const sharedAttachments = resolveAttachments(attachments);
   // emails = [{ to, subject, body }, ...]
 
   if (!Array.isArray(emails) || !emails.length) {
@@ -80,12 +98,14 @@ app.post("/send-batch", async (req, res) => {
   const results = [];
   for (const email of emails) {
     try {
+      const perEmailAttachments = resolveAttachments(email.attachments);
       const info = await transporter.sendMail({
         from: `"${fromName || process.env.GMAIL_USER}" <${process.env.GMAIL_USER}>`,
         to: email.to,
         replyTo: replyTo || process.env.GMAIL_USER,
         subject: email.subject,
         text: email.body,
+        attachments: perEmailAttachments.length ? perEmailAttachments : sharedAttachments,
       });
       results.push({ to: email.to, success: true, messageId: info.messageId });
     } catch (err) {
@@ -159,7 +179,7 @@ app.post("/generate", async (req, res) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-3-haiku-20240307",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1000,
         messages: [{ role: "user", content: prompt }],
       }),
@@ -193,6 +213,66 @@ app.delete("/upload/:filename", (req, res) => {
     if (err) return res.status(500).json({ error: "Delete failed" });
     res.json({ status: "deleted" });
   });
+});
+
+// ── WhatsApp endpoints ──────────────────────────────────────────────
+const wa = require("./wa-service");
+
+app.get("/wa/status", (req, res) => res.json(wa.getStatus()));
+
+app.post("/wa/start", (req, res) => {
+  wa.init();
+  res.json(wa.getStatus());
+});
+
+app.post("/wa/logout", async (req, res) => {
+  await wa.logout();
+  res.json({ ok: true });
+});
+
+app.get("/wa/groups", async (req, res) => {
+  try {
+    const groups = await wa.listGroups();
+    res.json({ groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/wa/watch", (req, res) => {
+  const { groupIds } = req.body;
+  const watched = wa.setWatched(groupIds);
+  res.json({ watchedGroups: watched });
+});
+
+app.post("/wa/process", async (req, res) => {
+  const { groupId, role } = req.body;
+  if (!groupId) return res.status(400).json({ error: "groupId required" });
+  try {
+    const result = await wa.processGroup(groupId, role || "");
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/wa/inbox", (req, res) => res.json({ inbox: wa.getInbox() }));
+
+app.post("/wa/inbox/:id/apply", (req, res) => {
+  const item = wa.markInboxItem(req.params.id, "applied");
+  if (!item) return res.status(404).json({ error: "Not found" });
+  res.json({ item });
+});
+
+app.post("/wa/inbox/:id/dismiss", (req, res) => {
+  const item = wa.markInboxItem(req.params.id, "dismissed");
+  if (!item) return res.status(404).json({ error: "Not found" });
+  res.json({ item });
+});
+
+app.post("/wa/inbox/clear-dismissed", (req, res) => {
+  const removed = wa.clearDismissed();
+  res.json({ removed });
 });
 
 app.listen(PORT, () => console.log(`✅ HR Agent server running on http://localhost:${PORT}`));
