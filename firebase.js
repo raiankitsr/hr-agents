@@ -7,13 +7,15 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "",
-  authDomain: "",
+  apiKey: "AIzaSyCTOReotm3pvZGArebFpD3c5nMf-lIbea0",
+  authDomain: "hr-agents-24317.firebaseapp.com",
   projectId: "hr-agents-24317",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  storageBucket: "hr-agents-24317.firebasestorage.app",
+  messagingSenderId: "1081751091895",
+  appId: "1:1081751091895:web:d5f50e2f5a88f084b96b32",
+  measurementId: "G-0DVTHDMCXW"
 };
+
 
 const app = initializeApp(firebaseConfig);
 

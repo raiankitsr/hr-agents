@@ -6,7 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "frontend": "vite",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "build": "vite build",
+    "postinstall": "vite build || true"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "cors": "^2.8.5",

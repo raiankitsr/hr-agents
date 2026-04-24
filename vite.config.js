@@ -16,6 +16,8 @@ export default defineConfig({
       "/upload": "http://localhost:3001",
       "/uploads": "http://localhost:3001",
       "/wa": "http://localhost:3001",
+      "/discover": "http://localhost:3001",
+      "/admin": "http://localhost:3001",
     },
   },
 });

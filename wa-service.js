@@ -7,25 +7,36 @@
 const fs = require("fs");
 const path = require("path");
 const QRCode = require("qrcode");
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
+require("dotenv").config();
 
 const STATE_PATH = path.join(__dirname, "wa-state.json");
 const SESSION_PATH = path.join(__dirname, ".wwebjs_auth");
 
-// In-memory mirror of state, persisted to disk.
-let state = {
-  watchedGroups: [],     // ["123@g.us", ...]
-  inbox: [],             // [{ id, email, company, jobTitle, snippet, groupId, groupName, sender, ts, status }]
-  seenMessageIds: [],    // for dedupe of WA messages
-  seenEmailKeys: [],     // `${email}|${groupId}` to avoid re-queueing same email from same group
-};
+// Per-user state map. Shape: { [userId]: { watchedGroups, inbox, seenMessageIds, seenEmailKeys } }
+let state = { users: {}, ownerUserId: null };
 let saveTimer = null;
+
+function emptyUserState() {
+  return { watchedGroups: [], inbox: [], seenMessageIds: [], seenEmailKeys: [] };
+}
+
+function userState(uid) {
+  if (!uid) uid = "_anonymous";
+  if (!state.users[uid]) state.users[uid] = emptyUserState();
+  return state.users[uid];
+}
 
 function loadState() {
   try {
     if (fs.existsSync(STATE_PATH)) {
       const raw = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
-      state = { ...state, ...raw };
+      // Migrate legacy (flat) state into `_anonymous` bucket if needed
+      if (raw && !raw.users && (raw.inbox || raw.watchedGroups)) {
+        state = { users: { _anonymous: { ...emptyUserState(), ...raw } }, ownerUserId: null };
+      } else {
+        state = { users: {}, ownerUserId: null, ...raw };
+      }
     }
   } catch (err) {
     console.error("[wa] load state failed:", err.message);
@@ -43,10 +54,9 @@ function saveStateSoon() {
   }, 250);
 }
 
-// Cap arrays so the JSON file doesn't grow forever.
-function trimDedupe() {
-  if (state.seenMessageIds.length > 5000) state.seenMessageIds = state.seenMessageIds.slice(-3000);
-  if (state.seenEmailKeys.length > 2000) state.seenEmailKeys = state.seenEmailKeys.slice(-1500);
+function trimDedupe(u) {
+  if (u.seenMessageIds.length > 5000) u.seenMessageIds = u.seenMessageIds.slice(-3000);
+  if (u.seenEmailKeys.length > 2000) u.seenEmailKeys = u.seenEmailKeys.slice(-1500);
 }
 
 let client = null;
@@ -76,14 +86,52 @@ function snippet(text, maxLen = 280) {
   return clean.length > maxLen ? clean.slice(0, maxLen) + "..." : clean;
 }
 
+// Extract text from an image using Claude Vision API
+async function extractTextFromImage(base64Data, mimeType) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { console.error("[wa] no ANTHROPIC_API_KEY for image OCR"); return ""; }
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mimeType || "image/jpeg", data: base64Data } },
+            { type: "text", text: "Extract ALL text from this image exactly as written. Include email addresses, company names, job titles, requirements, and contact details. Return only the extracted text, nothing else." }
+          ]
+        }]
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { console.error("[wa] vision API error:", data.error?.message); return ""; }
+    return data.content?.map(c => c.text || "").join("") || "";
+  } catch (err) {
+    console.error("[wa] vision extraction failed:", err.message);
+    return "";
+  }
+}
+
+// Route incoming live messages to the WA session owner's inbox (if group is watched).
 async function handleMessage(msg) {
   try {
     const chat = await msg.getChat();
     if (!chat.isGroup) return;
-    if (!state.watchedGroups.includes(chat.id._serialized)) return;
-    if (state.seenMessageIds.includes(msg.id._serialized)) return;
+    const ownerId = state.ownerUserId;
+    if (!ownerId) return;
+    const u = userState(ownerId);
+    if (!u.watchedGroups.includes(chat.id._serialized)) return;
+    if (u.seenMessageIds.includes(msg.id._serialized)) return;
 
-    state.seenMessageIds.push(msg.id._serialized);
+    u.seenMessageIds.push(msg.id._serialized);
 
     const body = msg.body || "";
     const emails = body.match(EMAIL_RE);
@@ -100,10 +148,10 @@ async function handleMessage(msg) {
     for (const rawEmail of emails) {
       const email = rawEmail.toLowerCase();
       const dedupeKey = `${email}|${chat.id._serialized}`;
-      if (state.seenEmailKeys.includes(dedupeKey)) continue;
-      state.seenEmailKeys.push(dedupeKey);
+      if (u.seenEmailKeys.includes(dedupeKey)) continue;
+      u.seenEmailKeys.push(dedupeKey);
 
-      state.inbox.unshift({
+      u.inbox.unshift({
         id: `${ts}-${Math.random().toString(36).slice(2, 8)}`,
         email,
         company: ctx.company,
@@ -113,40 +161,57 @@ async function handleMessage(msg) {
         groupName: chat.name || "",
         sender,
         ts,
-        status: "pending", // pending | applied | dismissed
+        status: "pending",
       });
       added++;
     }
 
     if (added > 0) {
-      console.log(`[wa] queued ${added} email(s) from "${chat.name}"`);
-      // Cap inbox at 500 pending+done entries to keep payloads sane.
-      if (state.inbox.length > 500) state.inbox = state.inbox.slice(0, 500);
+      console.log(`[wa] queued ${added} email(s) from "${chat.name}" for user ${ownerId}`);
+      if (u.inbox.length > 500) u.inbox = u.inbox.slice(0, 500);
     }
 
-    trimDedupe();
+    trimDedupe(u);
     saveStateSoon();
   } catch (err) {
     console.error("[wa] message handler error:", err.message);
   }
 }
 
-function init() {
+function init(userId) {
+  loadState();
+  if (userId) {
+    state.ownerUserId = userId;
+    userState(userId); // ensure bucket exists
+    saveStateSoon();
+  }
   if (client && status === "ready") return;
-  // Clean up stale client if exists
   if (client) {
     try { client.destroy(); } catch { }
     client = null;
   }
-  loadState();
   status = "initializing";
+
+  // Resolve a Chromium executable in this order:
+  //   1. PUPPETEER_EXECUTABLE_PATH env var (explicit override, e.g. in Docker)
+  //   2. macOS Google Chrome (local dev)
+  //   3. Linux Chromium (typical Debian/Alpine containers)
+  //   4. Puppeteer's bundled Chromium (falls back if nothing else)
+  const chromeCandidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+  ];
+  const executablePath = chromeCandidates.find(p => p && fs.existsSync(p));
 
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
     puppeteer: {
       headless: true,
-      executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      ...(executablePath ? { executablePath } : {}),
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     },
   });
 
@@ -201,63 +266,98 @@ async function fetchGroupsInBackground() {
   fetchingGroups = false;
 }
 
-async function listGroups() {
+async function listGroups(userId) {
   if (!client || status !== "ready") return [];
-  // Always return cache immediately; trigger background refresh if stale
   if (cachedGroups.length === 0 || Date.now() - groupsFetchedAt > 300000) {
     fetchGroupsInBackground();
   }
-  return cachedGroups.map(g => ({ ...g, watched: state.watchedGroups.includes(g.id) }));
+  const u = userState(userId);
+  return cachedGroups.map(g => ({ ...g, watched: u.watchedGroups.includes(g.id) }));
 }
 
-// Pre-fetch groups when WA becomes ready
 function onReady() {
   status = "ready";
-  console.log("[wa] ready — listening to watched groups");
+  console.log("[wa] ready — listening for watched groups");
   fetchGroupsInBackground();
 }
 
-function setWatched(groupIds) {
-  state.watchedGroups = Array.isArray(groupIds) ? groupIds : [];
+function setWatched(userId, groupIds) {
+  const u = userState(userId);
+  u.watchedGroups = Array.isArray(groupIds) ? groupIds : [];
   saveStateSoon();
-  return state.watchedGroups;
+  return u.watchedGroups;
 }
 
-function getInbox() {
-  return state.inbox;
+function getInbox(userId) {
+  return userState(userId).inbox;
 }
 
-function markInboxItem(id, newStatus) {
-  const item = state.inbox.find(x => x.id === id);
+function addDiscoveredItems(userId, items) {
+  const u = userState(userId);
+  let added = 0;
+  for (const item of items) {
+    const dedupeKey = `${item.email}|${item.groupId || "discover"}`;
+    if (u.seenEmailKeys.includes(dedupeKey)) continue;
+    u.seenEmailKeys.push(dedupeKey);
+
+    u.inbox.unshift({
+      id: `${item.ts || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      email: item.email,
+      company: item.company || "",
+      jobTitle: item.jobTitle || "",
+      snippet: item.snippet || "",
+      groupId: item.groupId || "discover",
+      groupName: item.groupName || item.source || "Discover",
+      sender: "",
+      ts: item.ts || Date.now(),
+      status: "pending",
+    });
+    added++;
+  }
+  if (u.inbox.length > 500) u.inbox = u.inbox.slice(0, 500);
+  trimDedupe(u);
+  saveStateSoon();
+  return added;
+}
+
+function markInboxItem(userId, id, newStatus) {
+  const u = userState(userId);
+  const item = u.inbox.find(x => x.id === id);
   if (!item) return null;
   item.status = newStatus;
   saveStateSoon();
   return item;
 }
 
-function clearDismissed() {
-  const before = state.inbox.length;
-  state.inbox = state.inbox.filter(x => x.status !== "dismissed");
+function clearDismissed(userId) {
+  const u = userState(userId);
+  const before = u.inbox.length;
+  u.inbox = u.inbox.filter(x => x.status !== "dismissed");
   saveStateSoon();
-  return before - state.inbox.length;
+  return before - u.inbox.length;
 }
 
-async function logout() {
+async function logout(userId) {
   if (!client) return;
   try { await client.logout(); } catch { }
   try { await client.destroy(); } catch { }
   client = null;
   qrDataUrl = null;
   status = "idle";
-  // wipe session + dedupe so next init starts clean
   try { fs.rmSync(SESSION_PATH, { recursive: true, force: true }); } catch { }
-  state.seenMessageIds = [];
-  state.seenEmailKeys = [];
+  if (userId) {
+    const u = userState(userId);
+    u.seenMessageIds = [];
+    u.seenEmailKeys = [];
+  }
+  state.ownerUserId = null;
   saveStateSoon();
 }
 
-async function processGroup(groupId, roleFilter) {
+async function processGroup(userId, groupId, roleFilter) {
   if (!client || status !== "ready") throw new Error("WhatsApp not connected");
+  if (!userId) throw new Error("userId required");
+  const u = userState(userId);
 
   const groupMeta = cachedGroups.find(g => g.id === groupId);
   if (!groupMeta) throw new Error("Group not found — try refreshing groups");
@@ -275,15 +375,43 @@ async function processGroup(groupId, roleFilter) {
 
     const msgs = chat.msgs.getModelsArray();
     return msgs
-      .filter(m => m.body && m.t >= since)
+      .filter(m => m.t >= since)
       .map(m => ({
         id: m.id._serialized || `${m.id.fromMe}_${m.id.id}`,
-        body: m.body,
+        body: m.body || "",
         timestamp: m.t,
         author: m.author || "",
         notifyName: m.notifyName || "",
+        type: m.type || "chat",          // "image", "chat", "document", etc.
+        hasMedia: !!(m.mediaData && m.type === "image"),
       }));
   }, groupId, thirtyDaysAgo);
+
+  // Process image messages: download media → extract text via Claude Vision
+  let imageCount = 0;
+  for (const msg of rawMessages) {
+    if (!msg.hasMedia) continue;
+    if (u.seenMessageIds.includes(msg.id)) continue;
+    try {
+      // Download image via whatsapp-web.js Message object
+      const waMsg = await client.getMessageById(msg.id);
+      if (!waMsg) continue;
+      const media = await waMsg.downloadMedia();
+      if (!media || !media.data) continue;
+
+      const extractedText = await extractTextFromImage(media.data, media.mimetype);
+      if (extractedText) {
+        msg.body = (msg.body ? msg.body + "\n" : "") + extractedText;
+        msg.fromImage = true;
+        imageCount++;
+        console.log(`[wa] extracted text from image in "${groupMeta.name}"`);
+      }
+    } catch (err) {
+      // getMessageById may fail on some messages — skip silently
+      console.error(`[wa] image download failed: ${err.message}`);
+    }
+  }
+  if (imageCount > 0) console.log(`[wa] processed ${imageCount} image(s) with OCR`);
 
   const keywords = roleFilter
     ? roleFilter.toLowerCase().split(/[\s,]+/).filter(Boolean)
@@ -292,11 +420,10 @@ async function processGroup(groupId, roleFilter) {
   let added = 0;
   for (const msg of rawMessages) {
     if (!msg.body) continue;
-    if (state.seenMessageIds.includes(msg.id)) continue;
+    if (u.seenMessageIds.includes(msg.id)) continue;
 
     const body = msg.body;
 
-    // If role filter provided, skip messages that don't mention any keyword
     if (keywords.length > 0) {
       const lower = body.toLowerCase();
       const matches = keywords.some(k => lower.includes(k));
@@ -306,7 +433,7 @@ async function processGroup(groupId, roleFilter) {
     const emails = body.match(EMAIL_RE);
     if (!emails || !emails.length) continue;
 
-    state.seenMessageIds.push(msg.id);
+    u.seenMessageIds.push(msg.id);
     const ctx = extractContext(body);
     const ts = (msg.timestamp || Math.floor(Date.now() / 1000)) * 1000;
     const sender = msg.author || msg.notifyName || "";
@@ -314,10 +441,10 @@ async function processGroup(groupId, roleFilter) {
     for (const rawEmail of emails) {
       const email = rawEmail.toLowerCase();
       const dedupeKey = `${email}|${groupId}`;
-      if (state.seenEmailKeys.includes(dedupeKey)) continue;
-      state.seenEmailKeys.push(dedupeKey);
+      if (u.seenEmailKeys.includes(dedupeKey)) continue;
+      u.seenEmailKeys.push(dedupeKey);
 
-      state.inbox.unshift({
+      u.inbox.unshift({
         id: `${ts}-${Math.random().toString(36).slice(2, 8)}`,
         email,
         company: ctx.company,
@@ -333,15 +460,26 @@ async function processGroup(groupId, roleFilter) {
     }
   }
 
-  if (state.inbox.length > 500) state.inbox = state.inbox.slice(0, 500);
-  trimDedupe();
+  if (u.inbox.length > 500) u.inbox = u.inbox.slice(0, 500);
+  trimDedupe(u);
   saveStateSoon();
-  console.log(`[wa] processed ${rawMessages.length} msgs from "${groupMeta.name}", found ${added} new email(s)`);
+  console.log(`[wa] user ${userId}: processed ${rawMessages.length} msgs from "${groupMeta.name}", found ${added} new email(s)`);
   return { processed: rawMessages.length, found: added };
 }
 
-function getStatus() {
-  return { status, qrDataUrl, watchedGroups: state.watchedGroups, inboxCount: state.inbox.filter(x => x.status === "pending").length };
+function getStatus(userId) {
+  const u = userState(userId);
+  const owner = state.ownerUserId;
+  const isOwner = owner && owner === userId;
+  return {
+    status,
+    qrDataUrl: isOwner || !owner ? qrDataUrl : null,
+    watchedGroups: u.watchedGroups,
+    inboxCount: u.inbox.filter(x => x.status === "pending").length,
+    ownerUserId: owner,
+    isOwner,
+    sessionBusy: !!owner && !isOwner && status !== "idle",
+  };
 }
 
-module.exports = { init, getStatus, listGroups, setWatched, getInbox, markInboxItem, clearDismissed, logout, processGroup };
+module.exports = { init, getStatus, listGroups, setWatched, getInbox, markInboxItem, clearDismissed, logout, processGroup, addDiscoveredItems };

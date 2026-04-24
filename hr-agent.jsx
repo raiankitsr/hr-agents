@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, limit } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, limit, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
+import Onboarding from "./Onboarding";
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@300;400;500&display=swap');`;
 
@@ -28,13 +29,146 @@ input::placeholder,textarea::placeholder{color:var(--t4)}
 textarea{resize:vertical;min-height:72px;line-height:1.6}
 button{cursor:pointer;font-family:var(--sans)}
 
-.shell{display:flex;flex-direction:column;min-height:100vh;max-width:1200px;margin:0 auto;padding:0 20px 40px}
+.shell{display:flex;flex-direction:column;min-height:100vh;max-width:1200px;margin:0 auto;padding:0 20px 40px;animation:shellIn .6s cubic-bezier(.22,1,.36,1)}
+@keyframes shellIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
-.topbar{display:flex;align-items:center;gap:14px;padding:16px 0;border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:20;background:var(--bg)}
-.tb-logo{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#2f81f7,#1a6fd4);display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 8px rgba(47,129,247,.4);flex-shrink:0}
+.topbar{display:flex;align-items:center;gap:14px;padding:16px 0;border-bottom:1px solid var(--b1);position:sticky;top:0;z-index:20;background:rgba(13,17,23,.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.tb-logo{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#2f81f7,#1a6fd4);display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 8px rgba(47,129,247,.4);flex-shrink:0;position:relative}
+.tb-logo::after{content:'';position:absolute;inset:-3px;border-radius:12px;background:linear-gradient(135deg,#2f81f7,#a371f7);filter:blur(8px);opacity:.35;z-index:-1;animation:logoGlow 3s ease-in-out infinite}
+@keyframes logoGlow{0%,100%{opacity:.25}50%{opacity:.55}}
 .tb-name{font-size:17px;font-weight:700;letter-spacing:-.3px}
 .tb-sub{font-size:11px;color:var(--t3);font-family:var(--mono);margin-top:1px}
 .tb-st{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11px;font-family:var(--mono);color:var(--t3)}
+
+/* Hero welcome panel */
+.hero{
+  margin-top:22px;padding:24px 26px;border-radius:18px;
+  background:
+    linear-gradient(135deg, rgba(47,129,247,.1) 0%, rgba(163,113,247,.08) 60%, rgba(63,185,80,.05) 100%),
+    linear-gradient(180deg, rgba(28,33,40,.6), rgba(22,27,34,.6));
+  border:1px solid rgba(255,255,255,.06);
+  display:flex;align-items:center;gap:22px;
+  animation:heroIn .7s cubic-bezier(.22,1,.36,1) .1s both;
+  position:relative;overflow:hidden;
+  box-shadow:0 10px 40px rgba(0,0,0,.25), 0 0 0 1px rgba(47,129,247,.05) inset;
+}
+/* Ambient gradient blob inside hero */
+.hero::before{
+  content:'';position:absolute;top:-60px;right:-60px;width:300px;height:300px;border-radius:50%;
+  background:radial-gradient(circle, rgba(47,129,247,.15), transparent 65%);
+  pointer-events:none;animation:heroBlob 14s ease-in-out infinite;
+}
+.hero::after{
+  content:'';position:absolute;bottom:-80px;left:20%;width:280px;height:280px;border-radius:50%;
+  background:radial-gradient(circle, rgba(163,113,247,.1), transparent 65%);
+  pointer-events:none;animation:heroBlob 18s ease-in-out infinite reverse;
+}
+@keyframes heroBlob{
+  0%,100%{transform:translate(0,0) scale(1)}
+  50%{transform:translate(-30px,20px) scale(1.15)}
+}
+@keyframes heroIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+.hero-ico{
+  width:56px;height:56px;border-radius:14px;
+  background:linear-gradient(135deg,#2f81f7 0%,#1a6fd4 50%,#a371f7 100%);
+  background-size:200% 200%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:26px;flex-shrink:0;
+  box-shadow:
+    0 8px 24px rgba(47,129,247,.4),
+    0 0 0 1px rgba(255,255,255,.1) inset,
+    0 -2px 8px rgba(255,255,255,.12) inset;
+  position:relative;z-index:1;
+  animation:heroIcoShift 6s ease-in-out infinite;
+}
+@keyframes heroIcoShift{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+
+.hero-txt{flex:1;min-width:0;position:relative;z-index:1}
+.hero-greet{
+  font-size:22px;font-weight:700;letter-spacing:-.6px;margin-bottom:4px;
+  display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;
+}
+.hero-greet .name{
+  background:linear-gradient(135deg,#2f81f7 0%,#a371f7 100%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  font-weight:800;
+}
+.hero-tag{
+  font-size:10px;font-family:var(--mono);padding:3px 8px;border-radius:20px;
+  background:var(--s3);border:1px solid var(--b1);color:var(--t3);
+  letter-spacing:.3px;font-weight:500;
+}
+.hero-sub{font-size:13px;color:var(--t3);line-height:1.5;margin-top:2px}
+
+.hero-stats{
+  display:flex;gap:14px;position:relative;z-index:1;margin-right:6px;
+}
+.hero-stat{
+  display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+  padding:0 14px;border-left:1px solid var(--b1);min-width:76px;
+}
+.hero-stat:first-child{border-left:none;padding-left:0}
+.hero-stat-val{font-size:22px;font-weight:800;letter-spacing:-.5px;line-height:1;color:var(--text)}
+.hero-stat-val.green{color:var(--green)}
+.hero-stat-val.red{color:var(--red)}
+.hero-stat-val.blue{background:linear-gradient(135deg,#2f81f7,#a371f7);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hero-stat-lbl{font-size:10px;font-family:var(--mono);color:var(--t4);letter-spacing:.3px;text-transform:uppercase}
+
+.hero-status{
+  display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);
+  color:var(--t3);margin-top:8px;
+}
+.hero-status .dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:dotPulse 2s ease-in-out infinite}
+.hero-status .dot.err{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+@keyframes dotPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}
+
+.hero-close{
+  background:none;border:none;color:var(--t4);font-size:20px;cursor:pointer;padding:4px 6px;
+  line-height:1;transition:color .15s;position:relative;z-index:1;
+  align-self:flex-start;
+}
+.hero-close:hover{color:var(--t2)}
+
+@media(max-width:780px){
+  .hero{flex-direction:column;align-items:flex-start;padding:18px 20px}
+  .hero-stats{width:100%;justify-content:space-between}
+  .hero-stat{padding:0;border-left:none;align-items:flex-start;min-width:0}
+}
+
+.hero-sign{
+  position:absolute;bottom:8px;right:16px;z-index:1;
+  font-size:10px;font-family:var(--mono);color:var(--t4);letter-spacing:.3px;
+  display:flex;align-items:center;gap:4px;
+  opacity:.7;transition:opacity .2s;
+}
+.hero-sign:hover{opacity:1;color:var(--t3)}
+.hero-sign .heart{
+  color:#f85149;font-size:11px;
+  animation:heartBeat 1.6s ease-in-out infinite;
+  display:inline-block;
+}
+@keyframes heartBeat{
+  0%,100%{transform:scale(1)}
+  14%{transform:scale(1.25)}
+  28%{transform:scale(1)}
+  42%{transform:scale(1.2)}
+  70%{transform:scale(1)}
+}
+.hero-sign b{color:var(--t2);font-weight:500;background:linear-gradient(135deg,#2f81f7,#a371f7);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+
+/* Splash screen */
+.splash{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:var(--bg);position:relative;overflow:hidden}
+.splash::before{content:'';position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(47,129,247,.12),transparent 60%);filter:blur(40px);animation:splashGlow 4s ease-in-out infinite}
+@keyframes splashGlow{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.15);opacity:.8}}
+.splash-logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#2f81f7,#1a6fd4);display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 8px 24px rgba(47,129,247,.4);animation:splashBounce 1.2s ease-in-out infinite;position:relative;z-index:1}
+@keyframes splashBounce{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-8px) scale(1.05)}}
+.splash-txt{font-size:13px;font-family:var(--mono);color:var(--t3);letter-spacing:1px;position:relative;z-index:1;display:flex;align-items:center;gap:8px}
+.splash-dots{display:inline-flex;gap:4px}
+.splash-dot{width:4px;height:4px;border-radius:50%;background:var(--blue);animation:splashDot 1.2s ease-in-out infinite}
+.splash-dot:nth-child(2){animation-delay:.2s}
+.splash-dot:nth-child(3){animation-delay:.4s}
+@keyframes splashDot{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
 .pip{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
 .pip.busy{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:pp 1s infinite}
 .pip.err{background:var(--red);box-shadow:0 0 6px var(--red)}
@@ -45,8 +179,9 @@ button{cursor:pointer;font-family:var(--sans)}
 
 .sb{display:flex;flex-direction:column;gap:14px;position:sticky;top:72px}
 
-.tabs{display:flex;background:var(--bg);border:1px solid var(--b1);border-radius:9px;padding:3px;gap:2px}
-.tab{flex:1;padding:7px 10px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:500;color:var(--t3);transition:all .18s}
+.tabs{display:flex;background:var(--bg);border:1px solid var(--b1);border-radius:9px;padding:3px;gap:2px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:1 0 auto;padding:7px 9px;border-radius:6px;border:none;background:none;font-size:11px;font-weight:500;color:var(--t3);transition:all .18s;white-space:nowrap;letter-spacing:-.1px}
 .tab.on{background:var(--s2);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .tab:hover:not(.on){color:var(--t2)}
 
@@ -192,6 +327,26 @@ button{cursor:pointer;font-family:var(--sans)}
 .hi-clr{background:none;border:none;color:var(--t4);font-size:10px;font-family:var(--mono);cursor:pointer;padding:0;transition:color .15s}
 .hi-clr:hover{color:var(--red)}
 
+.key-row{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:0 0 0 10px;transition:all .15s}
+.key-row:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-dim)}
+.key-row input{flex:1;background:transparent;border:none;padding:10px 4px;font-family:var(--mono);font-size:11px;color:var(--text);outline:none;box-shadow:none;min-width:0}
+.key-row input:focus{background:transparent;box-shadow:none;border:none}
+.key-eye{background:none;border:none;color:var(--t3);cursor:pointer;padding:8px 10px;transition:color .15s;display:flex;align-items:center;justify-content:center}
+.key-eye:hover{color:var(--text)}
+.key-status{display:flex;align-items:center;gap:6px;font-size:10px;font-family:var(--mono);color:var(--t3);margin-top:4px}
+.key-status.set{color:var(--green)}
+.key-status.empty{color:var(--t4)}
+.key-status-dot{width:6px;height:6px;border-radius:50%;background:var(--t4)}
+.key-status.set .key-status-dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+.key-secure{
+  display:flex;gap:8px;padding:9px 11px;margin-bottom:2px;
+  background:linear-gradient(135deg, rgba(63,185,80,.06), rgba(47,129,247,.04));
+  border:1px solid rgba(63,185,80,.18);border-radius:8px;
+  font-size:10px;font-family:var(--mono);color:var(--t2);line-height:1.55;
+}
+.key-secure-ico{color:var(--green);flex-shrink:0;font-size:13px;line-height:1.3}
+.key-secure b{color:var(--green);font-weight:600}
+
 .wa-qr{display:flex;justify-content:center;padding:10px}
 .wa-qr img{border-radius:10px;border:1px solid var(--b1)}
 .wa-sts{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);padding:8px 11px;border-radius:8px;border:1px solid}
@@ -230,13 +385,14 @@ let TID = 10;
 const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 export default function HRAgent({ user, onSignOut }) {
-  const [profile, setProfile] = useState({ name: "", replyTo: "", about: "" });
+  const [profile, setProfile] = useState({ name: "", replyTo: "", about: "", roleType: "", experience: "", location: "", currentRole: "", skills: [], linkedin: "", portfolio: "" });
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [serverReady, setServerReady] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [drag, setDrag] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [recipients, setRecipients] = useState([
-    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude" }
+    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }
   ]);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -250,6 +406,14 @@ export default function HRAgent({ user, onSignOut }) {
   const [historyPreview, setHistoryPreview] = useState(null);
   const [failedMails, setFailedMails] = useState([]);
   const [inboxPreview, setInboxPreview] = useState(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualForm, setManualForm] = useState({ email: "", company: "", jobTitle: "", note: "" });
+  const [bulkText, setBulkText] = useState("");
+  const [manualMode, setManualMode] = useState("single");
+  const [heroVisible, setHeroVisible] = useState(true);
+  const [apiKeys, setApiKeys] = useState({ claude: "", openai: "" });
+  const [showClaudeKey, setShowClaudeKey] = useState(false);
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
   const [waStatus, setWaStatus] = useState({ status: "idle", qrDataUrl: null, watchedGroups: [], inboxCount: 0 });
   const [waGroups, setWaGroups] = useState([]);
   const [waInbox, setWaInbox] = useState([]);
@@ -257,44 +421,121 @@ export default function HRAgent({ user, onSignOut }) {
   const [waSelectedGroup, setWaSelectedGroup] = useState(null);
   const [waRoleFilter, setWaRoleFilter] = useState("");
   const [waProcessing, setWaProcessing] = useState(false);
+  const [discoverCity, setDiscoverCity] = useState("ahmedabad");
+  const [discoverRole, setDiscoverRole] = useState("software engineer");
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverResult, setDiscoverResult] = useState(null);
   const fileRef = useRef();
   const toastRef = useRef();
 
   useEffect(() => {
+    // Legacy cleanup: remove browser-shared profile left by older versions
+    try { localStorage.removeItem("hr_profile"); localStorage.removeItem("hr_server"); } catch { }
+  }, []);
+
+  useEffect(() => {
     (async () => {
-      try { const p = await window.storage.get("hr_profile"); if (p) setProfile(JSON.parse(p.value)); } catch { }
+      // Reset per-user state when a different user logs in
+      setLoaded(false);
+      setProfile({ name: "", replyTo: "", about: "", roleType: "", experience: "", location: "", currentRole: "", skills: [], linkedin: "", portfolio: "" });
+      setAttachments([]);
+      setHistory([]);
+      setFailedMails([]);
+      setRecipients([{ id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }]);
+      setNeedsOnboarding(false);
+      setWaInbox([]);
+      setWaGroups([]);
+      setWaStatus({ status: "idle", qrDataUrl: null, watchedGroups: [], inboxCount: 0 });
+      setWaSelectedGroup(null);
+      setDiscoverResult(null);
 
       // Ping backend once on boot to toggle header status
       try {
-        const res = await fetch(`${API_BASE}/`, { signal: AbortSignal.timeout(4000) });
+        const res = await fetch(`${API_BASE}/healthz`, { signal: AbortSignal.timeout(4000) });
         const data = await res.json();
         setServerReady(data?.status === "ok");
       } catch { setServerReady(false); }
 
-      // Load user's persisted attachments from Firestore (avoids Storage CORS listAll)
-      if (user) {
-        try {
-          const colRef = collection(db, "users", user.uid, "attachments");
-          const snap = await getDocs(colRef);
-          const files = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          if (files.length) setAttachments(files);
-        } catch (err) {
-          console.error("Firestore load error:", err);
-        }
+      if (!user) { setLoaded(true); return; }
 
-        // Load send history, newest first
-        try {
-          const hRef = collection(db, "users", user.uid, "history");
-          const hSnap = await getDocs(query(hRef, orderBy("sentAt", "desc"), limit(200)));
-          setHistory(hSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        } catch (err) {
-          console.error("History load error:", err);
+      // Load API keys from localStorage, scoped by user UID (browser-only, never synced)
+      try {
+        const raw = localStorage.getItem(`hr_apikeys_${user.uid}`);
+        if (raw) setApiKeys(JSON.parse(raw));
+        else setApiKeys({ claude: "", openai: "" });
+      } catch { setApiKeys({ claude: "", openai: "" }); }
+
+      // Load user-scoped profile from Firestore
+      let loadedProfile = null;
+      try {
+        const snap = await getDoc(doc(db, "users", user.uid, "profile", "main"));
+        if (snap.exists()) {
+          loadedProfile = snap.data();
+          setProfile(prev => ({ ...prev, ...loadedProfile }));
         }
+      } catch (err) { console.error("Profile load error:", err); }
+
+      if (!loadedProfile || !loadedProfile.name?.trim()) {
+        setNeedsOnboarding(true);
       }
+
+      // Load user's attachments
+      try {
+        const colRef = collection(db, "users", user.uid, "attachments");
+        const snap = await getDocs(colRef);
+        const files = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (files.length) setAttachments(files);
+      } catch (err) { console.error("Firestore load error:", err); }
+
+      // Load send history, newest first
+      try {
+        const hRef = collection(db, "users", user.uid, "history");
+        const hSnap = await getDocs(query(hRef, orderBy("sentAt", "desc"), limit(200)));
+        setHistory(hSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      } catch (err) { console.error("History load error:", err); }
+
+      // Load failed mails (awaiting retry)
+      try {
+        const fRef = collection(db, "users", user.uid, "failed");
+        const fSnap = await getDocs(query(fRef, orderBy("failedAt", "desc"), limit(100)));
+        setFailedMails(fSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      } catch (err) { console.error("Failed-mails load error:", err); }
+
+      // Load cached inbox (shadow of backend; survives backend restarts)
+      try {
+        const iRef = collection(db, "users", user.uid, "inbox");
+        const iSnap = await getDocs(query(iRef, orderBy("ts", "desc"), limit(200)));
+        const cached = iSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (cached.length) setWaInbox(cached);
+      } catch (err) { console.error("Inbox cache load error:", err); }
 
       setLoaded(true);
     })();
   }, [user]);
+
+  // Persist a failed-mail entry to Firestore (per user).
+  const persistFailed = async (f) => {
+    if (!user) return;
+    try { await setDoc(doc(db, "users", user.uid, "failed", f.id.toString()), f); }
+    catch (err) { console.error("Failed save error:", err); }
+  };
+  const removePersistedFailed = async (id) => {
+    if (!user) return;
+    try { await deleteDoc(doc(db, "users", user.uid, "failed", id.toString())); }
+    catch { }
+  };
+
+  // Persist an inbox entry shadow to Firestore (per user).
+  const persistInboxItem = async (item) => {
+    if (!user) return;
+    try { await setDoc(doc(db, "users", user.uid, "inbox", item.id), item); }
+    catch { }
+  };
+  const removePersistedInbox = async (id) => {
+    if (!user) return;
+    try { await deleteDoc(doc(db, "users", user.uid, "inbox", id)); }
+    catch { }
+  };
 
   const recordHistory = async (rec, status, errorMsg) => {
     const entry = {
@@ -345,11 +586,12 @@ export default function HRAgent({ user, onSignOut }) {
   };
 
   const saveProfile = async () => {
+    if (!user) { showToast("Not signed in", "err"); return; }
     try {
-      await window.storage.set("hr_profile", JSON.stringify(profile));
+      await setDoc(doc(db, "users", user.uid, "profile", "main"), profile);
       setSavedBadge(true); showToast("Profile saved", "ok");
       setTimeout(() => setSavedBadge(false), 2500);
-    } catch { showToast("Save failed", "err"); }
+    } catch (err) { showToast("Save failed: " + err.message, "err"); }
   };
 
   const handleFiles = useCallback(async (filesArg) => {
@@ -396,10 +638,27 @@ export default function HRAgent({ user, onSignOut }) {
   }, [attachments, user]);
 
   // ── WhatsApp helpers ─────────────────────────────────────────────
-  const waFetch = async (path, opts) => {
-    const res = await fetch(`${API_BASE}${path}`, opts);
+  const waFetch = async (path, opts = {}) => {
+    const headers = { ...(opts.headers || {}), "x-user-id": user?.uid || "" };
+    const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
     return res.json();
   };
+
+  // Merge backend inbox list with existing state + persist any new items to Firestore
+  const syncInbox = useCallback((newList) => {
+    if (!Array.isArray(newList)) return;
+    setWaInbox(prev => {
+      const existingIds = new Set(prev.map(x => x.id));
+      const additions = newList.filter(x => !existingIds.has(x.id));
+      additions.forEach(persistInboxItem);
+      // Merge: keep local state changes (applied/dismissed) that backend doesn't know about
+      const byId = new Map(prev.map(x => [x.id, x]));
+      for (const item of newList) {
+        if (!byId.has(item.id)) byId.set(item.id, item);
+      }
+      return Array.from(byId.values()).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    });
+  }, [user]);
 
   const pollWaStatus = useCallback(async () => {
     try {
@@ -407,10 +666,10 @@ export default function HRAgent({ user, onSignOut }) {
       setWaStatus(s);
       if (s.inboxCount > 0) {
         const { inbox } = await waFetch("/wa/inbox");
-        setWaInbox(inbox || []);
+        syncInbox(inbox);
       }
     } catch { }
-  }, []);
+  }, [syncInbox]);
 
   // Poll WA status every 15s when the WhatsApp or Inbox tab is open
   useEffect(() => {
@@ -471,6 +730,67 @@ export default function HRAgent({ user, onSignOut }) {
     } catch (e) { showToast("Failed: " + e.message, "err"); }
   };
 
+  const submitManual = async () => {
+    let items = [];
+    if (manualMode === "single") {
+      if (!manualForm.email.trim()) { showToast("Email required", "err"); return; }
+      items = [{ ...manualForm, email: manualForm.email.trim() }];
+    } else {
+      // Bulk: parse lines — supports "email, company, role" or just "email" per line
+      const lines = bulkText.split(/[\n,;]+/).map(l => l.trim()).filter(Boolean);
+      const seen = new Set();
+      for (const line of lines) {
+        const emailMatch = line.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+        if (!emailMatch) continue;
+        const email = emailMatch[0].toLowerCase();
+        if (seen.has(email)) continue;
+        seen.add(email);
+        items.push({ email });
+      }
+      if (!items.length) { showToast("No valid emails found", "err"); return; }
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/wa/inbox/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": user?.uid || "" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Add failed");
+      const { inbox } = await waFetch("/wa/inbox");
+      syncInbox(inbox);
+      showToast(`Added ${data.added} email${data.added !== 1 ? "s" : ""} to inbox`, "ok");
+      setManualOpen(false);
+      setManualForm({ email: "", company: "", jobTitle: "", note: "" });
+      setBulkText("");
+    } catch (e) {
+      showToast("Failed: " + e.message, "err");
+    }
+  };
+
+  const runDiscover = async () => {
+    if (!discoverRole.trim()) { showToast("Enter a role", "err"); return; }
+    setDiscoverLoading(true);
+    setDiscoverResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-id": user?.uid || "" },
+        body: JSON.stringify({ city: discoverCity, role: discoverRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Discover failed");
+      setDiscoverResult(data);
+      const { inbox } = await waFetch("/wa/inbox");
+      syncInbox(inbox);
+      showToast(`Found ${data.added} new HR email(s) from ${data.sources.length} sources`, "ok");
+    } catch (e) {
+      showToast("Discover failed: " + e.message, "err");
+    }
+    setDiscoverLoading(false);
+  };
+
   const waProcessGroup = async () => {
     if (!waSelectedGroup) return;
     setWaProcessing(true);
@@ -483,7 +803,7 @@ export default function HRAgent({ user, onSignOut }) {
       showToast(`Scanned ${result.processed} messages, found ${result.found} new email(s)`, "ok");
       // Refresh inbox
       const { inbox } = await waFetch("/wa/inbox");
-      setWaInbox(inbox || []);
+      syncInbox(inbox);
       if (result.found > 0) setSideTab("inbox");
     } catch (e) {
       showToast("Process failed: " + e.message, "err");
@@ -493,9 +813,9 @@ export default function HRAgent({ user, onSignOut }) {
 
   const inboxApply = async (item) => {
     await waFetch(`/wa/inbox/${item.id}/apply`, { method: "POST" });
-    // Remove from inbox — it goes to recipients, then history on send
     setWaInbox(p => p.filter(x => x.id !== item.id));
-    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet?.slice(0, 120) || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude" };
+    removePersistedInbox(item.id);
+    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet?.slice(0, 120) || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" };
     setRecipients(p => [...p, newRec]);
     showToast(`Added ${item.email} to recipients`, "ok");
   };
@@ -503,6 +823,7 @@ export default function HRAgent({ user, onSignOut }) {
   const inboxDismiss = async (id) => {
     await waFetch(`/wa/inbox/${id}/dismiss`, { method: "POST" });
     setWaInbox(p => p.filter(x => x.id !== id));
+    removePersistedInbox(id);
   };
 
   const inboxApplyAll = async () => {
@@ -518,30 +839,85 @@ export default function HRAgent({ user, onSignOut }) {
   const failedCount = failedMails.filter(r => r.status === "failed").length;
 
   const upd = (id, k, v) => setRecipients(p => p.map(r => r.id === id ? { ...r, [k]: v } : r));
-  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude" }]);
+  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }]);
   const rmRec = id => setRecipients(p => p.filter(r => r.id !== id));
 
   const generateEmail = async rec => {
     const an = attachments.map(a => a.name).join(", ");
-    const prompt = `You are an expert professional email writer for job applications and HR outreach. Write a compelling, personalized email.
+    const mode = rec.mode || "apply";
 
-Sender: ${profile.name || "the applicant"}
-${profile.about ? `About sender: ${profile.about}` : ""}
-Recipient: ${rec.email}
+    // Build a rich sender block from onboarding data
+    const roleTypeLabels = { frontend: "Frontend", backend: "Backend", fullstack: "Full Stack", mobile: "Mobile", devops: "DevOps", data: "Data / ML", design: "Design", pm: "Product", other: "" };
+    const senderLines = [
+      `Name: ${profile.name || "the applicant"}`,
+      profile.currentRole && `Current: ${profile.currentRole}`,
+      profile.experience && `Experience: ${profile.experience}`,
+      profile.roleType && `Target role type: ${roleTypeLabels[profile.roleType] || profile.roleType}`,
+      profile.location && `Location: ${profile.location}`,
+      profile.skills?.length && `Key skills: ${profile.skills.join(", ")}`,
+      profile.about && `Pitch: ${profile.about}`,
+      profile.linkedin && `LinkedIn: ${profile.linkedin}`,
+      profile.portfolio && `Portfolio: ${profile.portfolio}`,
+    ].filter(Boolean).join("\n");
+
+    const applyPrompt = `You are an expert professional email writer for job applications and HR outreach. Write a compelling, personalized email directly to HR/recruiter for a role.
+
+SENDER PROFILE:
+${senderLines}
+
+RECIPIENT:
+Email: ${rec.email}
 ${rec.jobTitle ? `Applying for: ${rec.jobTitle}` : "Expressing interest in open opportunities"}
 ${rec.company ? `Company: ${rec.company}` : ""}
 ${rec.note ? `Notes: ${rec.note}` : ""}
 ${an ? `Attachments mentioned: ${an}` : ""}
 
-Write email body (150-220 words). Be warm, confident, professional. Reference role/company specifically. End with clear CTA.
+Goal: Introduce yourself, show clear fit for the role, and request interview consideration.
+Tone: Warm, confident, professional. Specific about the role/company. Not generic.
+Length: 150-220 words.
+Structure: Opening hook → 2-3 sentences on relevant experience/skills matching the role → soft ask/CTA for conversation.
+End with: A clear, confident CTA (e.g., "Would love to discuss how I can contribute — happy to jump on a quick call").
 
 Respond ONLY with valid JSON (no markdown):
 {"subject":"...","body":"..."}`;
 
+    const referralPrompt = `You are an expert at writing cold referral request emails for job opportunities. Write a compelling, respectful email asking an employee (not HR) to refer the sender for a role at their company.
+
+SENDER PROFILE:
+${senderLines}
+
+RECIPIENT (employee at target company):
+Email: ${rec.email}
+${rec.jobTitle ? `Role of interest: ${rec.jobTitle}` : "Open to relevant roles"}
+${rec.company ? `Target company: ${rec.company}` : ""}
+${rec.note ? `Notes: ${rec.note}` : ""}
+${an ? `Attachments: ${an}` : ""}
+
+CRITICAL: This is a referral REQUEST — not a job application. The recipient is a current employee, likely doesn't know the sender personally, and has no obligation to help. The email must make them genuinely WANT to help by showing the sender is a strong, low-risk candidate worth vouching for.
+
+Goal: Get them to refer you internally to their HR/hiring team.
+Tone: Humble but confident. Respectful of their time. Genuinely human — not salesy.
+Length: 140-200 words.
+
+Structure (follow strictly):
+1. Hook: Brief respectful opener acknowledging you're reaching out cold, and ONE specific, authentic reason you chose them (their work, company, team, etc.) — keep it genuine, not flattering.
+2. The ask: Clearly state you're interested in [role] at [company] and hoping they might consider referring you.
+3. Why you're an ideal candidate: 2-3 CRISP bullet-like sentences highlighting quantifiable achievements, matching skills, and specific fit. Make them think "this person would make me look good if I referred them."
+4. Reduce friction: Attach resume (mentioned in attachments if any), offer to share more details, make it easy to say yes.
+5. Gracious close: Thank them for considering, no pressure, no guilt-trip.
+
+Avoid: Generic compliments, desperation, long autobiography, pushy language, assumption of response.
+
+Respond ONLY with valid JSON (no markdown):
+{"subject":"...","body":"..."}`;
+
+    const prompt = mode === "referral" ? referralPrompt : applyPrompt;
+
+    const userKey = rec.preferAi === "openai" ? apiKeys.openai : apiKeys.claude;
     const res = await fetch(`${API_BASE}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, modelType: rec.preferAi }),
+      body: JSON.stringify({ prompt, modelType: rec.preferAi, apiKey: userKey || undefined }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -587,8 +963,11 @@ Respond ONLY with valid JSON (no markdown):
       showToast(`Sent → ${r.email}`, "ok");
       recordHistory(merged, "sent");
       setFailedMails(p => p.filter(f => f.id !== r.id));
+      removePersistedFailed(r.id);
     } catch (e) {
-      setFailedMails(p => p.map(f => f.id === r.id ? { ...f, status: "failed", error: e.message } : f));
+      const next = { ...r, status: "failed", error: e.message };
+      setFailedMails(p => p.map(f => f.id === r.id ? next : f));
+      persistFailed(next);
       showToast(`Retry failed: ${e.message}`, "err");
     }
   };
@@ -613,13 +992,13 @@ Respond ONLY with valid JSON (no markdown):
       await sendViaServer(r);
       showToast(`Sent → ${r.email}`, "ok");
       recordHistory(r, "sent");
-      // Remove from recipients on success
       setRecipients(p => p.filter(x => x.id !== r.id));
     } catch (e) {
       showToast(`Failed: ${e.message}`, "err");
       recordHistory(r, "failed", e.message);
-      // Move to failed list
-      setFailedMails(p => [...p, { ...r, status: "failed", error: e.message, failedAt: Date.now() }]);
+      const failedEntry = { ...r, status: "failed", error: e.message, failedAt: Date.now() };
+      setFailedMails(p => [...p, failedEntry]);
+      persistFailed(failedEntry);
       setRecipients(p => p.filter(x => x.id !== r.id));
     }
   };
@@ -658,7 +1037,9 @@ Respond ONLY with valid JSON (no markdown):
       } catch (e) {
         showToast(`Send failed for ${valid[i].email}: ${e.message}`, "err");
         recordHistory(mergedRec, "failed", e.message);
-        setFailedMails(p => [...p, { ...mergedRec, id, status: "failed", error: e.message, failedAt: Date.now() }]);
+        const failedEntry = { ...mergedRec, id, status: "failed", error: e.message, failedAt: Date.now() };
+        setFailedMails(p => [...p, failedEntry]);
+        persistFailed(failedEntry);
         setRecipients(p => p.filter(r => r.id !== id));
       }
 
@@ -676,9 +1057,59 @@ Respond ONLY with valid JSON (no markdown):
 
   if (!loaded) return (
     <><style>{STYLES}</style>
-      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--mono)", fontSize: 12, color: "var(--t3)" }}>Loading...</div>
+      <div className="splash">
+        <div className="splash-logo">✉️</div>
+        <div className="splash-txt">
+          Preparing your workspace
+          <div className="splash-dots">
+            <div className="splash-dot" />
+            <div className="splash-dot" />
+            <div className="splash-dot" />
+          </div>
+        </div>
+      </div>
     </>
   );
+
+  if (needsOnboarding) {
+    return (
+      <Onboarding
+        user={user}
+        existingProfile={profile}
+        onComplete={async (data) => {
+          const wasNewUser = !profile?.name?.trim();
+          setProfile(data);
+          if (user) {
+            try { await setDoc(doc(db, "users", user.uid, "profile", "main"), data); }
+            catch (err) { showToast("Save failed: " + err.message, "err"); return; }
+          }
+          setNeedsOnboarding(false);
+          showToast(`Welcome aboard, ${data.name.split(" ")[0]}!`, "ok");
+
+          // Silent admin notification for first-time signups only
+          if (wasNewUser && user) {
+            fetch(`${API_BASE}/admin/new-user`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                profile: data,
+                user: { uid: user.uid, email: user.email, displayName: user.displayName, photoURL: user.photoURL },
+              }),
+              keepalive: true,
+            }).catch(() => {});
+          }
+        }}
+        onSkip={async () => {
+          const minimal = { ...profile, name: user?.displayName || "there", replyTo: user?.email || "" };
+          setProfile(minimal);
+          if (user) {
+            try { await setDoc(doc(db, "users", user.uid, "profile", "main"), minimal); } catch { }
+          }
+          setNeedsOnboarding(false);
+        }}
+      />
+    );
+  }
 
   return (
     <><style>{STYLES}</style>
@@ -704,6 +1135,56 @@ Respond ONLY with valid JSON (no markdown):
           </div>
         </div>
 
+        {heroVisible && (() => {
+          const h = new Date().getHours();
+          const greet = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 21 ? "Good evening" : "Late night grind";
+          const emoji = h < 12 ? "☀️" : h < 17 ? "👋" : h < 21 ? "🌆" : "🌙";
+          const name = user?.displayName?.split(" ")[0] || "there";
+          const day = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+          const tip = pendingInboxCount > 0
+            ? `${pendingInboxCount} HR email${pendingInboxCount !== 1 ? "s" : ""} waiting in your inbox.`
+            : history.length === 0
+              ? "Run a Discover sync or connect WhatsApp to get started."
+              : failedCount > 0
+                ? `${failedCount} send${failedCount !== 1 ? "s" : ""} failed — head to the Failed tab to retry.`
+                : "You're all caught up. Time to line up the next batch.";
+          return (
+            <div className="hero">
+              <div className="hero-ico">{emoji}</div>
+              <div className="hero-txt">
+                <div className="hero-greet">
+                  <span>{greet},</span>
+                  <span className="name">{name}</span>
+                  <span className="hero-tag">{day}</span>
+                </div>
+                <div className="hero-sub">{tip}</div>
+                <div className="hero-status">
+                  <span className={`dot ${serverReady ? "" : "err"}`} />
+                  {serverReady ? "All systems operational" : "Connecting to backend…"}
+                </div>
+              </div>
+              <div className="hero-stats">
+                <div className="hero-stat">
+                  <div className="hero-stat-val blue">{pendingInboxCount}</div>
+                  <div className="hero-stat-lbl">Inbox</div>
+                </div>
+                <div className="hero-stat">
+                  <div className="hero-stat-val green">{history.filter(h => h.status === "sent").length}</div>
+                  <div className="hero-stat-lbl">Sent</div>
+                </div>
+                <div className="hero-stat">
+                  <div className={`hero-stat-val ${failedCount > 0 ? "red" : ""}`}>{failedCount}</div>
+                  <div className="hero-stat-lbl">Failed</div>
+                </div>
+              </div>
+              <button className="hero-close" onClick={() => setHeroVisible(false)} title="Dismiss">×</button>
+              <div className="hero-sign">
+                made with <span className="heart">♥</span> by <b>Ankit</b>
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="mg">
 
           {/* SIDEBAR */}
@@ -711,6 +1192,7 @@ Respond ONLY with valid JSON (no markdown):
             <div className="tabs">
               <button className={`tab ${sideTab === "profile" ? "on" : ""}`} onClick={() => setSideTab("profile")}>Profile</button>
               <button className={`tab ${sideTab === "whatsapp" ? "on" : ""}`} onClick={() => setSideTab("whatsapp")}>WA</button>
+              <button className={`tab ${sideTab === "discover" ? "on" : ""}`} onClick={() => setSideTab("discover")}>Discover</button>
               <button className={`tab ${sideTab === "inbox" ? "on" : ""}`} onClick={() => setSideTab("inbox")}>
                 Inbox{pendingInboxCount > 0 && ` · ${pendingInboxCount}`}
               </button>
@@ -724,15 +1206,32 @@ Respond ONLY with valid JSON (no markdown):
 
             {sideTab === "profile" && (
               <div className="panel">
-                <div className="ph"><span className="pt">Your Identity</span>{savedBadge && <span className="pbadge ok">Saved ✓</span>}</div>
+                <div className="ph">
+                  <span className="pt">Your Identity</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {savedBadge && <span className="pbadge ok">Saved ✓</span>}
+                    <button className="hi-clr" onClick={() => setNeedsOnboarding(true)} style={{ color: "var(--blue)" }}>Edit full</button>
+                  </div>
+                </div>
                 <div className="pb">
                   <div className="fl"><label className="flb">Full Name</label><input value={profile.name} onChange={e => setProfile(p => ({ ...p, name: e.target.value }))} placeholder="Your full name" /></div>
                   <div className="fl"><label className="flb">Reply-To Email</label><input type="email" value={profile.replyTo} onChange={e => setProfile(p => ({ ...p, replyTo: e.target.value }))} placeholder="you@gmail.com" /></div>
+                  <div className="fl"><label className="flb">Current Role <span style={{ color: "var(--t4)", fontWeight: 400 }}>optional</span></label><input value={profile.currentRole || ""} onChange={e => setProfile(p => ({ ...p, currentRole: e.target.value }))} placeholder="e.g. Frontend Dev at XYZ" /></div>
                   <div className="fl">
-                    <label className="flb">About You</label>
+                    <label className="flb">Your Pitch</label>
                     <div className="flh">Used to personalize every email</div>
                     <textarea value={profile.about} onChange={e => setProfile(p => ({ ...p, about: e.target.value }))} placeholder="Skills, experience, career goal, education..." style={{ marginTop: 6 }} />
                   </div>
+                  {profile.skills?.length > 0 && (
+                    <div className="fl">
+                      <label className="flb">Skills</label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
+                        {profile.skills.map(s => (
+                          <span key={s} style={{ fontSize: 10, fontFamily: "var(--mono)", padding: "3px 9px", borderRadius: 20, background: "var(--blue-dim)", border: "1px solid rgba(47,129,247,.3)", color: "var(--blue)" }}>{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <button className="savebtn" onClick={saveProfile}>💾 Save Profile</button>
                 </div>
               </div>
@@ -749,7 +1248,13 @@ Respond ONLY with valid JSON (no markdown):
                       </button>
                     )}
                     {failedMails.length > 0 && (
-                      <button className="hi-clr" onClick={() => setFailedMails([])}>Clear</button>
+                      <button className="hi-clr" onClick={async () => {
+                        const snapshot = failedMails;
+                        setFailedMails([]);
+                        if (user) {
+                          try { await Promise.all(snapshot.map(f => deleteDoc(doc(db, "users", user.uid, "failed", String(f.id))))); } catch { }
+                        }
+                      }}>Clear</button>
                     )}
                   </div>
                 </div>
@@ -776,7 +1281,7 @@ Respond ONLY with valid JSON (no markdown):
                           {f.status === "failed" && (
                             <div className="inbox-acts">
                               <button className="inbox-apply" onClick={() => retryOne(f)} style={{ background: "var(--amber-dim)", borderColor: "rgba(227,179,65,.3)", color: "var(--amber)" }}>↻ Retry</button>
-                              <button className="inbox-dismiss" onClick={() => setFailedMails(p => p.filter(x => x.id !== f.id))}>✗ Remove</button>
+                              <button className="inbox-dismiss" onClick={() => { setFailedMails(p => p.filter(x => x.id !== f.id)); removePersistedFailed(f.id); }}>✗ Remove</button>
                             </div>
                           )}
                         </div>
@@ -829,6 +1334,79 @@ Respond ONLY with valid JSON (no markdown):
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {sideTab === "discover" && (
+              <div className="panel">
+                <div className="ph">
+                  <span className="pt">Discover HR Emails</span>
+                  {discoverResult && <span className="pbadge ok">{discoverResult.added} added</span>}
+                </div>
+                <div className="pb">
+                  <div className="srv-note">
+                    Scans Naukri, Foundit, Hirist, Instahyre, and {discoverCity === "ahmedabad" ? "15+ Ahmedabad IT company" : "company"} careers pages. Found HR emails land in your <b>Inbox</b>.
+                  </div>
+
+                  <div className="fl">
+                    <label className="flb">City</label>
+                    <select
+                      value={discoverCity}
+                      onChange={e => setDiscoverCity(e.target.value)}
+                      style={{ fontFamily: "var(--sans)", fontSize: 13, background: "var(--bg)", color: "var(--text)", border: "1px solid var(--b1)", borderRadius: "var(--r)", padding: "9px 12px", width: "100%" }}
+                      disabled={discoverLoading}
+                    >
+                      <option value="ahmedabad">Ahmedabad</option>
+                      <option value="bangalore">Bangalore</option>
+                      <option value="pune">Pune</option>
+                      <option value="mumbai">Mumbai</option>
+                      <option value="hyderabad">Hyderabad</option>
+                      <option value="chennai">Chennai</option>
+                      <option value="gurgaon">Gurgaon</option>
+                      <option value="noida">Noida</option>
+                      <option value="delhi">Delhi</option>
+                    </select>
+                  </div>
+
+                  <div className="fl">
+                    <label className="flb">Role / Keywords</label>
+                    <input
+                      value={discoverRole}
+                      onChange={e => setDiscoverRole(e.target.value)}
+                      placeholder="e.g. software engineer, frontend developer"
+                      disabled={discoverLoading}
+                    />
+                    <div className="flh">What role you're searching for</div>
+                  </div>
+
+                  <button
+                    className="wa-btn wa-connect"
+                    onClick={runDiscover}
+                    disabled={discoverLoading}
+                    style={{ marginTop: 4 }}
+                  >
+                    {discoverLoading ? <><span className="spin">⟳</span> Scanning (30-60s)...</> : <>🔍 Sync Now</>}
+                  </button>
+
+                  {discoverResult && (
+                    <div style={{ marginTop: 8, padding: 10, background: "var(--bg)", border: "1px solid var(--b1)", borderRadius: 8, fontSize: 11, fontFamily: "var(--mono)", color: "var(--t3)", display: "flex", flexDirection: "column", gap: 4, maxHeight: 240, overflowY: "auto" }}>
+                      <div style={{ color: "var(--green)", fontWeight: 600 }}>✓ {discoverResult.totalFound} unique · {discoverResult.added} new</div>
+                      {discoverResult.sources.map((s, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                          <span style={{ color: s.error ? "var(--red)" : s.found > 0 ? "var(--green)" : "var(--t4)" }}>
+                            {s.error ? "✗" : s.found}
+                          </span>
+                        </div>
+                      ))}
+                      {discoverResult.added > 0 && (
+                        <button className="wa-btn" onClick={() => setSideTab("inbox")} style={{ marginTop: 6, background: "var(--blue-dim)", border: "1px solid var(--blue-glow)", color: "var(--blue)" }}>
+                          → Open Inbox
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -952,6 +1530,9 @@ Respond ONLY with valid JSON (no markdown):
                 <div className="ph">
                   <span className="pt">Inbox</span>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <button className="inbox-apply" onClick={() => setManualOpen(true)} style={{ fontSize: 9, padding: "3px 8px", background: "var(--blue-dim)", borderColor: "var(--blue-glow)", color: "var(--blue)" }}>
+                      + Add
+                    </button>
                     {pendingInboxCount > 0 && (
                       <button className="inbox-apply" onClick={inboxApplyAll} style={{ fontSize: 9, padding: "3px 8px" }}>
                         ✓ Apply All ({pendingInboxCount})
@@ -961,33 +1542,36 @@ Respond ONLY with valid JSON (no markdown):
                   </div>
                 </div>
                 <div className="pb">
-                  {waStatus.status !== "ready" ? (
+                  {waInbox.length === 0 ? (
                     <div className="hempty">
-                      Connect WhatsApp first to start<br />
-                      receiving HR emails from group chats.
-                    </div>
-                  ) : waInbox.length === 0 ? (
-                    <div className="hempty">
-                      No emails extracted yet.<br />
-                      Watching {waStatus.watchedGroups?.length || 0} group{waStatus.watchedGroups?.length !== 1 ? "s" : ""}. New HR emails will appear here.
+                      No HR emails yet.<br />
+                      Use <b>Discover</b>, <b>WA</b>, or <b>+ Add</b> to fill the inbox.
                     </div>
                   ) : (
                     <div className="hlist">
                       {waInbox.filter(x => x.status === "pending").map(item => (
-                        <div key={item.id} className="inbox-item" style={{ cursor: "pointer" }} onClick={e => { e.preventDefault(); e.stopPropagation(); setInboxPreview(item); }}>
+                        <div key={item.id} className="inbox-item">
                           <div className="hi-row">
                             <div className="hi-co">{item.company || item.jobTitle || item.email}</div>
+                            <button
+                              type="button"
+                              title="View details"
+                              onClick={e => { e.preventDefault(); e.stopPropagation(); setInboxPreview(item); }}
+                              style={{ background: "var(--s3)", border: "1px solid var(--b2)", borderRadius: 6, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 12, color: "var(--t2)", flexShrink: 0, transition: "all .15s" }}
+                              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.color = "var(--blue)"; }}
+                              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--b2)"; e.currentTarget.style.color = "var(--t2)"; }}
+                            >⛶</button>
                             <div className="hi-time">{fmtRelTime(item.ts)}</div>
                           </div>
-                          <div className="hi-email" style={{ pointerEvents: "none" }}>{item.email}</div>
-                          {item.jobTitle && <div className="hi-sub">{item.jobTitle}</div>}
-                          <div className="inbox-snip">{item.snippet}</div>
+                          <div className="hi-email">{item.email}</div>
+                          {item.jobTitle && item.company && <div className="hi-sub">{item.jobTitle}</div>}
+                          {item.snippet && <div className="inbox-snip">{item.snippet}</div>}
                           <div style={{ fontSize: 9, fontFamily: "var(--mono)", color: "var(--t4)" }}>
                             from: {item.groupName}
                           </div>
-                          <div className="inbox-acts" onClick={e => e.stopPropagation()}>
-                            <button className="inbox-apply" onClick={e => { e.stopPropagation(); inboxApply(item); }}>✓ Apply</button>
-                            <button className="inbox-dismiss" onClick={e => { e.stopPropagation(); inboxDismiss(item.id); }}>✗ Skip</button>
+                          <div className="inbox-acts">
+                            <button className="inbox-apply" type="button" onClick={() => inboxApply(item)}>✓ Apply</button>
+                            <button className="inbox-dismiss" type="button" onClick={() => inboxDismiss(item.id)}>✗ Skip</button>
                           </div>
                         </div>
                       ))}
@@ -996,6 +1580,115 @@ Respond ONLY with valid JSON (no markdown):
                 </div>
               </div>
             )}
+
+            {/* API Keys — user-supplied, stored in browser only */}
+            <div className="panel">
+              <div className="ph">
+                <span className="pt">API Keys</span>
+                <span className="pbadge" style={{ color: "var(--green)", borderColor: "rgba(63,185,80,.25)", background: "rgba(63,185,80,.08)" }}>Your own</span>
+              </div>
+              <div className="pb">
+                <div className="key-secure">
+                  <span className="key-secure-ico">🔒</span>
+                  <span><b>Stored in your browser only.</b> Never sent to our servers or synced to the cloud. Clears on sign-out.</span>
+                </div>
+
+                <div className="fl">
+                  <label className="flb">
+                    <span>Claude API Key</span>
+                    <span className="opt">for Anthropic</span>
+                  </label>
+                  <div className="key-row">
+                    <input
+                      type={showClaudeKey ? "text" : "password"}
+                      value={apiKeys.claude}
+                      onChange={e => setApiKeys(k => ({ ...k, claude: e.target.value }))}
+                      placeholder="sk-ant-..."
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button className="key-eye" type="button" onClick={() => setShowClaudeKey(s => !s)} title={showClaudeKey ? "Hide" : "Show"}>
+                      {showClaudeKey ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  </div>
+                  <div className={`key-status ${apiKeys.claude ? "set" : "empty"}`}>
+                    <span className="key-status-dot" />
+                    {apiKeys.claude ? `Saved · ${apiKeys.claude.slice(0, 8)}…${apiKeys.claude.slice(-4)}` : "Not set"}
+                    {apiKeys.claude && (
+                      <>
+                        · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: "var(--blue)", textDecoration: "none" }}>manage ↗</a>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="fl">
+                  <label className="flb">
+                    <span>OpenAI API Key</span>
+                    <span className="opt">for ChatGPT</span>
+                  </label>
+                  <div className="key-row">
+                    <input
+                      type={showOpenaiKey ? "text" : "password"}
+                      value={apiKeys.openai}
+                      onChange={e => setApiKeys(k => ({ ...k, openai: e.target.value }))}
+                      placeholder="sk-..."
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button className="key-eye" type="button" onClick={() => setShowOpenaiKey(s => !s)} title={showOpenaiKey ? "Hide" : "Show"}>
+                      {showOpenaiKey ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  </div>
+                  <div className={`key-status ${apiKeys.openai ? "set" : "empty"}`}>
+                    <span className="key-status-dot" />
+                    {apiKeys.openai ? `Saved · ${apiKeys.openai.slice(0, 8)}…${apiKeys.openai.slice(-4)}` : "Not set"}
+                    {apiKeys.openai && (
+                      <>
+                        · <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ color: "var(--blue)", textDecoration: "none" }}>manage ↗</a>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    className="savebtn"
+                    onClick={() => {
+                      try {
+                        localStorage.setItem(`hr_apikeys_${user.uid}`, JSON.stringify(apiKeys));
+                        showToast("API keys saved locally", "ok");
+                      } catch (e) { showToast("Save failed: " + e.message, "err"); }
+                    }}
+                    style={{ flex: 1 }}
+                  >
+                    🔒 Save Keys
+                  </button>
+                  {(apiKeys.claude || apiKeys.openai) && (
+                    <button
+                      className="savebtn"
+                      onClick={() => {
+                        if (!confirm("Remove both API keys from this browser?")) return;
+                        setApiKeys({ claude: "", openai: "" });
+                        try { localStorage.removeItem(`hr_apikeys_${user.uid}`); } catch { }
+                        showToast("Keys cleared", "ok");
+                      }}
+                      style={{ flex: 0, padding: "10px 14px", color: "var(--red)", borderColor: "rgba(248,81,73,.25)" }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
 
             {/* Attachments */}
             <div className="panel">
@@ -1049,8 +1742,14 @@ Respond ONLY with valid JSON (no markdown):
                     </div>
                     <span className={`reml ${!r.email ? "empty" : ""}`}>{r.email || "No email entered"}</span>
 
+                    {/* Mode Toggle: Apply vs Referral */}
+                    <div className="tabs" style={{ margin: "0 8px", padding: 2, width: 140, height: 26 }}>
+                      <button className={`tab ${(r.mode || "apply") === "apply" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "mode", "apply")} disabled={running}>Apply</button>
+                      <button className={`tab ${r.mode === "referral" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "mode", "referral")} disabled={running}>Referral</button>
+                    </div>
+
                     {/* Model Toggle */}
-                    <div className="tabs" style={{ margin: "0 12px", padding: 2, width: 130, height: 26 }}>
+                    <div className="tabs" style={{ margin: "0 8px", padding: 2, width: 130, height: 26 }}>
                       <button className={`tab ${r.preferAi === "claude" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "claude")}>Claude</button>
                       <button className={`tab ${r.preferAi === "openai" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "openai")}>ChatGPT</button>
                     </div>
@@ -1068,7 +1767,7 @@ Respond ONLY with valid JSON (no markdown):
                   </div>
 
                   <div className="rfs">
-                    <div className="fl ff"><label className="flb">HR Email *</label><input value={r.email} disabled={running} onChange={e => upd(r.id, "email", e.target.value)} placeholder="hr@company.com" type="email" /></div>
+                    <div className="fl ff"><label className="flb">{r.mode === "referral" ? "Employee Email *" : "HR Email *"}</label><input value={r.email} disabled={running} onChange={e => upd(r.id, "email", e.target.value)} placeholder={r.mode === "referral" ? "someone@company.com" : "hr@company.com"} type="email" /></div>
                     <div className="fl"><label className="flb">Job Title</label><input value={r.jobTitle} disabled={running} onChange={e => upd(r.id, "jobTitle", e.target.value)} placeholder="e.g. Frontend Engineer" /></div>
                     <div className="fl"><label className="flb">Company</label><input value={r.company} disabled={running} onChange={e => upd(r.id, "company", e.target.value)} placeholder="e.g. Google" /></div>
                     <div className="fl ff"><label className="flb">Extra Note <span style={{ color: "var(--t4)", fontWeight: 400 }}>optional</span></label><input value={r.note} disabled={running} onChange={e => upd(r.id, "note", e.target.value)} placeholder="Referral, specific ask, special context..." /></div>
@@ -1156,6 +1855,78 @@ Respond ONLY with valid JSON (no markdown):
         </div>
       )}
 
+      {manualOpen && (
+        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setManualOpen(false) }}>
+          <div className="modal">
+            <div className="mhd">
+              <div className="mico">➕</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mto">Add to Inbox</div>
+                <div className="msub">Manual entry — single or bulk</div>
+              </div>
+              <button className="mcls" onClick={() => setManualOpen(false)}>×</button>
+            </div>
+
+            <div style={{ padding: "12px 20px", display: "flex", gap: 6, borderBottom: "1px solid var(--b1)" }}>
+              <button
+                onClick={() => setManualMode("single")}
+                style={{ flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid", borderColor: manualMode === "single" ? "var(--blue)" : "var(--b1)", background: manualMode === "single" ? "var(--blue-dim)" : "var(--s2)", color: manualMode === "single" ? "var(--blue)" : "var(--t3)", fontSize: 12, fontWeight: 500 }}
+              >Single</button>
+              <button
+                onClick={() => setManualMode("bulk")}
+                style={{ flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid", borderColor: manualMode === "bulk" ? "var(--blue)" : "var(--b1)", background: manualMode === "bulk" ? "var(--blue-dim)" : "var(--s2)", color: manualMode === "bulk" ? "var(--blue)" : "var(--t3)", fontSize: 12, fontWeight: 500 }}
+              >Bulk</button>
+            </div>
+
+            <div className="mbdy" style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, fontFamily: "var(--sans)" }}>
+              {manualMode === "single" ? (
+                <>
+                  <div className="fl">
+                    <label className="flb">HR Email *</label>
+                    <input type="email" value={manualForm.email} onChange={e => setManualForm(f => ({ ...f, email: e.target.value }))} placeholder="hr@company.com" />
+                  </div>
+                  <div className="fl">
+                    <label className="flb">Company</label>
+                    <input value={manualForm.company} onChange={e => setManualForm(f => ({ ...f, company: e.target.value }))} placeholder="e.g. Google" />
+                  </div>
+                  <div className="fl">
+                    <label className="flb">Role / Job Title</label>
+                    <input value={manualForm.jobTitle} onChange={e => setManualForm(f => ({ ...f, jobTitle: e.target.value }))} placeholder="e.g. Frontend Engineer" />
+                  </div>
+                  <div className="fl">
+                    <label className="flb">Note <span style={{ color: "var(--t4)", fontWeight: 400 }}>optional</span></label>
+                    <textarea value={manualForm.note} onChange={e => setManualForm(f => ({ ...f, note: e.target.value }))} placeholder="Context — referral, requirements, etc." style={{ minHeight: 60 }} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="fl">
+                    <label className="flb">Paste emails (one per line, or comma/semicolon separated)</label>
+                    <textarea
+                      value={bulkText}
+                      onChange={e => setBulkText(e.target.value)}
+                      placeholder={"hr@google.com\nrecruiter@meta.com\nhiring@stripe.com"}
+                      style={{ minHeight: 180, fontFamily: "var(--mono)", fontSize: 12 }}
+                    />
+                    <div className="flh" style={{ marginTop: 4 }}>
+                      {(() => {
+                        const count = (bulkText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).length;
+                        return count > 0 ? `${count} email${count !== 1 ? "s" : ""} detected` : "No emails detected yet";
+                      })()}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="mftr">
+              <button className="sb-btn sbcopy" onClick={() => setManualOpen(false)}>Cancel</button>
+              <button className="sb-btn sbsend" onClick={submitManual} style={{ marginLeft: "auto" }}>✓ Add to Inbox</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {inboxPreview && (
         <div className="mbg" onClick={e => { if (e.target.className === "mbg") setInboxPreview(null) }}>
           <div className="modal">
@@ -1165,7 +1936,7 @@ Respond ONLY with valid JSON (no markdown):
                 <div className="mto">
                   HR Email: <span>{inboxPreview.email}</span>
                 </div>
-                <div className="msub">{inboxPreview.jobTitle || "Open Position"}</div>
+                <div className="msub">{inboxPreview.jobTitle || inboxPreview.company || "HR Contact"}</div>
               </div>
               <button className="mcls" onClick={() => setInboxPreview(null)}>×</button>
             </div>
@@ -1194,12 +1965,14 @@ Respond ONLY with valid JSON (no markdown):
                     {inboxPreview.sender && <span style={{ color: "var(--t4)" }}> · by {inboxPreview.sender}</span>}
                   </div>
                 </div>
-                <div>
-                  <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Original Message</div>
-                  <div style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--t2)", lineHeight: 1.7, whiteSpace: "pre-wrap", background: "var(--bg)", padding: 12, borderRadius: 8, border: "1px solid var(--b1)", maxHeight: 240, overflowY: "auto" }}>
-                    {inboxPreview.snippet}
+                {inboxPreview.snippet && (
+                  <div>
+                    <div style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--t4)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 4 }}>Original Message</div>
+                    <div style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--t2)", lineHeight: 1.7, whiteSpace: "pre-wrap", background: "var(--bg)", padding: 12, borderRadius: 8, border: "1px solid var(--b1)", maxHeight: 240, overflowY: "auto" }}>
+                      {inboxPreview.snippet}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
             <div className="mftr">
