@@ -7,8 +7,7 @@
     "start": "node server.js",
     "frontend": "vite",
     "dev": "nodemon server.js",
-    "build": "vite build",
-    "postinstall": "vite build || true"
+    "build": "vite build"
   },
   "engines": {
     "node": ">=20"
