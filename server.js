@@ -32,15 +32,17 @@ app.get("/healthz", (req, res) => res.json({ status: "ok", service: "HR Outreach
 // returned from /upload, and `name` is the original display name.
 function resolveAttachments(list) {
   if (!Array.isArray(list)) return [];
-  return list
-    .map(a => {
-      if (!a || !a.filename) return null;
-      const safe = path.basename(a.filename);
-      const full = path.join(__dirname, "uploads", safe);
-      if (!fs.existsSync(full)) return null;
-      return { filename: a.name || safe, path: full };
-    })
-    .filter(Boolean);
+  const resolved = [];
+  const missing = [];
+  for (const a of list) {
+    if (!a || !a.filename) continue;
+    const safe = path.basename(a.filename);
+    const full = path.join(__dirname, "uploads", safe);
+    if (!fs.existsSync(full)) { missing.push(a.name || safe); continue; }
+    resolved.push({ filename: a.name || safe, path: full });
+  }
+  if (missing.length) console.warn(`[send] attachment file(s) missing on disk: ${missing.join(", ")}`);
+  return resolved;
 }
 
 // Send single email
@@ -51,6 +53,8 @@ app.post("/send", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields: to, subject, body" });
   }
 
+  console.log(`[send] to=${to} attachments-incoming=${JSON.stringify(attachments || [])}`);
+
   try {
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -60,13 +64,17 @@ app.post("/send", async (req, res) => {
       },
     });
 
+    const resolvedAtts = resolveAttachments(attachments);
+    console.log(`[send] resolved ${resolvedAtts.length} of ${(attachments || []).length} attachments`);
+    if (resolvedAtts.length) console.log(`[send] paths: ${resolvedAtts.map(a => a.path).join(", ")}`);
+
     const info = await transporter.sendMail({
       from: `"${fromName || process.env.GMAIL_USER}" <${process.env.GMAIL_USER}>`,
       to,
       replyTo: replyTo || process.env.GMAIL_USER,
       subject,
       text: body,
-      attachments: resolveAttachments(attachments),
+      attachments: resolvedAtts,
     });
 
     res.json({ success: true, messageId: info.messageId });
@@ -330,6 +338,70 @@ app.post("/wa/inbox/:id/dismiss", (req, res) => {
 app.post("/wa/inbox/clear-dismissed", (req, res) => {
   const removed = wa.clearDismissed(getUserId(req));
   res.json({ removed });
+});
+
+// Extract structured info from an uploaded image or PDF (job posting / flyer / screenshot).
+// Returns array of { email, company, jobTitle, snippet } the client can preview before adding.
+app.post("/wa/inbox/extract", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  const apiKey = req.header("x-anthropic-key") || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: "No Claude API key (set in Settings → API Keys)" });
+
+  const fullPath = path.join(__dirname, "uploads", req.file.filename);
+  const mime = req.file.mimetype || "";
+  const isImage = mime.startsWith("image/");
+  const isPdf = mime === "application/pdf";
+
+  if (!isImage && !isPdf) {
+    fs.unlink(fullPath, () => {});
+    return res.status(400).json({ error: "Only images and PDFs supported" });
+  }
+
+  try {
+    const buf = fs.readFileSync(fullPath);
+    const data = buf.toString("base64");
+
+    const sourceBlock = isPdf
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
+      : { type: "image", source: { type: "base64", media_type: mime, data } };
+
+    const instruction = `Extract every HR/recruiter contact email and surrounding job context from this document. For each distinct email found, return one entry. Respond ONLY with valid JSON, no markdown:
+{"items":[{"email":"hr@example.com","company":"Acme Corp","jobTitle":"Senior Backend Engineer","snippet":"3-4 sentence summary of the role/requirements as written in the source"}]}
+
+If no emails are found, return {"items":[]}. Don't invent emails. Don't hallucinate company names — only use what's clearly visible.`;
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1500,
+        messages: [{ role: "user", content: [sourceBlock, { type: "text", text: instruction }] }],
+      }),
+    });
+
+    const j = await r.json();
+    if (!r.ok) {
+      const msg = j.error?.message || "Claude vision failed";
+      const friendly = /invalid x-api-key|authentication/i.test(msg)
+        ? "Your saved Claude API key was rejected. Open the API Keys panel, clear it, and re-paste a fresh one from console.anthropic.com."
+        : msg;
+      throw new Error(friendly);
+    }
+
+    const text = j.content?.map(c => c.text || "").join("") || "";
+    const clean = text.replace(/```json|```/g, "").trim();
+    let parsed;
+    try { parsed = JSON.parse(clean); } catch { return res.status(500).json({ error: "Could not parse extraction result" }); }
+
+    const items = (parsed.items || []).filter(it => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(it.email || ""));
+    res.json({ items, raw: clean.slice(0, 500) });
+  } catch (err) {
+    console.error("Extract error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    fs.unlink(fullPath, () => {}); // cleanup uploaded temp file
+  }
 });
 
 app.post("/wa/inbox/add", (req, res) => {

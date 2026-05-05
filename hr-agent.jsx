@@ -410,6 +410,10 @@ export default function HRAgent({ user, onSignOut }) {
   const [manualForm, setManualForm] = useState({ email: "", company: "", jobTitle: "", note: "" });
   const [bulkText, setBulkText] = useState("");
   const [manualMode, setManualMode] = useState("single");
+  const [extractFile, setExtractFile] = useState(null);
+  const [extractItems, setExtractItems] = useState([]);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const extractFileRef = useRef();
   const [heroVisible, setHeroVisible] = useState(true);
   const [apiKeys, setApiKeys] = useState({ claude: "", openai: "" });
   const [showClaudeKey, setShowClaudeKey] = useState(false);
@@ -475,6 +479,31 @@ export default function HRAgent({ user, onSignOut }) {
         }
       } catch (err) { console.error("Profile load error:", err); }
 
+      // Auto-fill from Google whenever name is missing (covers: no doc, empty doc, name cleared)
+      const hasName = loadedProfile && loadedProfile.name && loadedProfile.name.trim();
+      if (!hasName && user.displayName) {
+        const minimal = {
+          ...(loadedProfile || {}),
+          name: user.displayName,
+          replyTo: (loadedProfile && loadedProfile.replyTo) || user.email || "",
+          about: (loadedProfile && loadedProfile.about) || "",
+          roleType: (loadedProfile && loadedProfile.roleType) || "",
+          experience: (loadedProfile && loadedProfile.experience) || "",
+          location: (loadedProfile && loadedProfile.location) || "",
+          currentRole: (loadedProfile && loadedProfile.currentRole) || "",
+          skills: (loadedProfile && loadedProfile.skills) || [],
+          linkedin: (loadedProfile && loadedProfile.linkedin) || "",
+          portfolio: (loadedProfile && loadedProfile.portfolio) || "",
+        };
+        try {
+          await setDoc(doc(db, "users", user.uid, "profile", "main"), minimal);
+          loadedProfile = minimal;
+          setProfile(prev => ({ ...prev, ...minimal }));
+          console.log("[profile] auto-filled name from Google account");
+        } catch (err) { console.error("Profile auto-fill error:", err); }
+      }
+
+      // Only show onboarding if we genuinely have nothing (no doc, no Google name).
       if (!loadedProfile || !loadedProfile.name?.trim()) {
         setNeedsOnboarding(true);
       }
@@ -621,15 +650,15 @@ export default function HRAgent({ user, onSignOut }) {
         };
         
         if (user) {
-          // Save metadata to Firestore so it persists for this user
-          await setDoc(doc(db, "users", user.uid, "attachments", file.name), fileData);
-          uploaded.push(fileData);
-        } else {
-          uploaded.push(fileData);
+          // Sanitize filename for Firestore doc id (no /, no leading dots, max 1500 bytes)
+          const docId = file.name.replace(/[\/.#$\[\]]/g, "_").slice(0, 200) || "file";
+          await setDoc(doc(db, "users", user.uid, "attachments", docId), fileData);
         }
-      } catch (err) { 
+        uploaded.push(fileData);
+      } catch (err) {
         console.error("Upload error:", err);
-        uploaded.push({ name: file.name, size: file.size, error: true }); 
+        showToast(`Upload failed for ${file.name}: ${err.message}`, "err");
+        uploaded.push({ name: file.name, size: file.size, error: true });
       }
     }
     setAttachments(prev => [...prev, ...uploaded]);
@@ -730,13 +759,40 @@ export default function HRAgent({ user, onSignOut }) {
     } catch (e) { showToast("Failed: " + e.message, "err"); }
   };
 
+  // Upload PDF/image → backend uses Claude Vision to extract HR emails + context
+  const runExtract = async (file) => {
+    if (!file) return;
+    setExtractLoading(true);
+    setExtractItems([]);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const claudeKey = (apiKeys.claude || "").trim();
+      const res = await fetch(`${API_BASE}/wa/inbox/extract`, {
+        method: "POST",
+        headers: { "x-user-id": user?.uid || "", ...(claudeKey ? { "x-anthropic-key": claudeKey } : {}) },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Extract failed");
+      if (!data.items?.length) {
+        showToast("No HR emails found in the file", "err");
+      } else {
+        setExtractItems(data.items.map(it => ({ ...it, _selected: true })));
+        showToast(`Found ${data.items.length} email${data.items.length !== 1 ? "s" : ""}`, "ok");
+      }
+    } catch (e) {
+      showToast("Extract failed: " + e.message, "err");
+    }
+    setExtractLoading(false);
+  };
+
   const submitManual = async () => {
     let items = [];
     if (manualMode === "single") {
       if (!manualForm.email.trim()) { showToast("Email required", "err"); return; }
       items = [{ ...manualForm, email: manualForm.email.trim() }];
-    } else {
-      // Bulk: parse lines — supports "email, company, role" or just "email" per line
+    } else if (manualMode === "bulk") {
       const lines = bulkText.split(/[\n,;]+/).map(l => l.trim()).filter(Boolean);
       const seen = new Set();
       for (const line of lines) {
@@ -748,6 +804,15 @@ export default function HRAgent({ user, onSignOut }) {
         items.push({ email });
       }
       if (!items.length) { showToast("No valid emails found", "err"); return; }
+    } else {
+      // file mode — use selected extracted items
+      items = extractItems.filter(it => it._selected).map(it => ({
+        email: it.email,
+        company: it.company || "",
+        jobTitle: it.jobTitle || "",
+        note: it.snippet || "",
+      }));
+      if (!items.length) { showToast("No emails selected to add", "err"); return; }
     }
 
     try {
@@ -764,6 +829,8 @@ export default function HRAgent({ user, onSignOut }) {
       setManualOpen(false);
       setManualForm({ email: "", company: "", jobTitle: "", note: "" });
       setBulkText("");
+      setExtractItems([]);
+      setExtractFile(null);
     } catch (e) {
       showToast("Failed: " + e.message, "err");
     }
@@ -815,7 +882,7 @@ export default function HRAgent({ user, onSignOut }) {
     await waFetch(`/wa/inbox/${item.id}/apply`, { method: "POST" });
     setWaInbox(p => p.filter(x => x.id !== item.id));
     removePersistedInbox(item.id);
-    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet?.slice(0, 120) || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" };
+    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" };
     setRecipients(p => [...p, newRec]);
     showToast(`Added ${item.email} to recipients`, "ok");
   };
@@ -860,55 +927,147 @@ export default function HRAgent({ user, onSignOut }) {
       profile.portfolio && `Portfolio: ${profile.portfolio}`,
     ].filter(Boolean).join("\n");
 
-    const applyPrompt = `You are an expert professional email writer for job applications and HR outreach. Write a compelling, personalized email directly to HR/recruiter for a role.
+    const applyPrompt = `You are writing a cold-application email that must make the recruiter think "this candidate is the perfect fit." This is precision-targeted, not a template.
 
 SENDER PROFILE:
 ${senderLines}
 
 RECIPIENT:
 Email: ${rec.email}
-${rec.jobTitle ? `Applying for: ${rec.jobTitle}` : "Expressing interest in open opportunities"}
+${rec.jobTitle ? `Role: ${rec.jobTitle}` : "Role: open opportunity"}
 ${rec.company ? `Company: ${rec.company}` : ""}
-${rec.note ? `Notes: ${rec.note}` : ""}
-${an ? `Attachments mentioned: ${an}` : ""}
+${an ? `Resume attached: ${an}` : ""}
 
-Goal: Introduce yourself, show clear fit for the role, and request interview consideration.
-Tone: Warm, confident, professional. Specific about the role/company. Not generic.
-Length: 150-220 words.
-Structure: Opening hook → 2-3 sentences on relevant experience/skills matching the role → soft ask/CTA for conversation.
-End with: A clear, confident CTA (e.g., "Would love to discuss how I can contribute — happy to jump on a quick call").
+JOB POSTING / CONTEXT (read this carefully — it's the actual posting):
+"""
+${rec.note || "(no posting text provided — use role + company name only)"}
+"""
 
-Respond ONLY with valid JSON (no markdown):
+YOUR TASK — TWO PHASES:
+
+PHASE 1 (silent, do not output): Read the JOB POSTING above. Extract:
+- The 3-4 hard requirements (specific technologies, years, domain).
+- 1-2 soft requirements (team-fit signals, work style).
+- Company-specific signals (product, mission, scale).
+Then cross-reference with SENDER PROFILE. Identify the top 3 sender skills/experiences that DIRECTLY map to the requirements. Note any specific keywords from the posting that should be MIRRORED in your reply (e.g., if posting says "scalable microservices", use that phrase, not "distributed systems").
+
+PHASE 2 (the email): Write it using the matches above.
+
+GOOD STYLE EXAMPLE — match this length, tone, and confidence:
+"""
+Subject: Application for Python + React + Node.js Developer at Techtic Solutions
+
+Hi Shreya,
+
+I'm excited to apply for the Python + React + Node.js Developer role at Techtic Solutions. Your focus on building scalable, high-performance applications closely matches the work I've been doing for the past two years.
+
+In my recent projects, I've shipped Python (FastAPI/Django) services backing React frontends, with Node.js handling real-time layers — exactly the stack your posting calls out. I focus on clean architecture and measurable performance: my last project cut p95 API latency by 40% through query and cache redesign.
+
+What draws me specifically to Techtic is your work on scalable product platforms — that's the kind of problem space I want to grow in. I'm confident I can contribute from week one.
+
+I've attached my resume with project details. Would welcome a quick call this week to discuss further.
+
+Best regards,
+Ankit Rai
+"""
+
+HARD RULES — DO NOT VIOLATE:
+1. Length: 140-200 words. Tight, not bloated.
+2. **Mirror specific keywords** from the JOB POSTING when they map to sender's real skills. Don't paraphrase — use their exact terminology.
+3. Open with "I'm excited to apply for the [exact role] at [Company]" + ONE genuine reason it fits (drawn from the posting, not generic flattery).
+4. NEVER apologize. NEVER say "I'm willing to learn" or "expanding into". If sender's stack only partially matches, lead with what matches and skip what doesn't.
+5. Show EVIDENCE, not claims: instead of "I'm proficient in X", write "I shipped X for [type of project]". If sender's pitch contains specifics or numbers, use them. If not, infer plausible specific phrasing from their currentRole/experience but never fabricate companies/numbers.
+6. ONE sentence with the company name + ONE specific reason that's actually tied to what the posting says (e.g., "your focus on [specific thing from posting]"). If posting is empty, use one safe truthful reason.
+7. Translate experience to years naturally ("1-3" → "over the past two years"). NO placeholders like "[X years]", "[name]", "[company]".
+8. Greeting: extract first name from email (e.g. "shreya.k@x.com" → "Hi Shreya,"). If unclear, "Hi there,". NEVER "Dear Hiring Manager".
+9. NO buzzwords: "synergy", "leverage", "passionate about", "rockstar", "ninja", "go-getter", "team player". Use plain confident English.
+10. Subject line: "Application for [exact role] at [Company]" — concise, specific, scannable. No emojis.
+
+STRUCTURE (4 paragraphs):
+P1 (1-2 sent): Direct application + ONE specific reason this fits, drawn from the posting.
+P2 (2-3 sent): Concrete proof of fit. Use 2-3 sender skills that match posting requirements. Show one piece of evidence (project type, scope, or measurable outcome).
+P3 (1-2 sent): What specifically about this team/company + what unique value you bring.
+P4 (1 sent): MUST explicitly mention attached resume by filename if provided (e.g. "I've attached my resume (Ankit_Rai_Mar.pdf) for your review."), then a clear CTA. Then sign with FIRST + LAST name from sender profile.
+
+Respond ONLY with valid JSON (no markdown, no code fences):
 {"subject":"...","body":"..."}`;
 
-    const referralPrompt = `You are an expert at writing cold referral request emails for job opportunities. Write a compelling, respectful email asking an employee (not HR) to refer the sender for a role at their company.
+    const referralPrompt = `You are writing a cold referral request that must make a current employee think "this person is sharp — referring them won't be embarrassing, it'll make me look good." This is a precision ask, not a templated plea.
 
 SENDER PROFILE:
 ${senderLines}
 
-RECIPIENT (employee at target company):
+RECIPIENT (current employee at target company — NOT HR):
 Email: ${rec.email}
-${rec.jobTitle ? `Role of interest: ${rec.jobTitle}` : "Open to relevant roles"}
+${rec.jobTitle ? `Role they'd refer for: ${rec.jobTitle}` : "Open to relevant roles"}
 ${rec.company ? `Target company: ${rec.company}` : ""}
-${rec.note ? `Notes: ${rec.note}` : ""}
-${an ? `Attachments: ${an}` : ""}
+${an ? `Resume attached: ${an}` : ""}
 
-CRITICAL: This is a referral REQUEST — not a job application. The recipient is a current employee, likely doesn't know the sender personally, and has no obligation to help. The email must make them genuinely WANT to help by showing the sender is a strong, low-risk candidate worth vouching for.
+JOB POSTING / CONTEXT (read this carefully):
+"""
+${rec.note || "(no posting text — work from role + company name only)"}
+"""
 
-Goal: Get them to refer you internally to their HR/hiring team.
-Tone: Humble but confident. Respectful of their time. Genuinely human — not salesy.
-Length: 140-200 words.
+YOUR TASK — TWO PHASES:
 
-Structure (follow strictly):
-1. Hook: Brief respectful opener acknowledging you're reaching out cold, and ONE specific, authentic reason you chose them (their work, company, team, etc.) — keep it genuine, not flattering.
-2. The ask: Clearly state you're interested in [role] at [company] and hoping they might consider referring you.
-3. Why you're an ideal candidate: 2-3 CRISP bullet-like sentences highlighting quantifiable achievements, matching skills, and specific fit. Make them think "this person would make me look good if I referred them."
-4. Reduce friction: Attach resume (mentioned in attachments if any), offer to share more details, make it easy to say yes.
-5. Gracious close: Thank them for considering, no pressure, no guilt-trip.
+PHASE 1 (silent, do not output): Read the JOB POSTING. Extract:
+- The 3-4 must-have skills/requirements.
+- 1 high-signal phrase the company uses about itself or the work.
+Cross-reference with the SENDER PROFILE. Pick the top 2-3 sender skills/projects that are direct, undeniable matches. Mirror exact keywords from the posting where they line up with sender's real experience.
 
-Avoid: Generic compliments, desperation, long autobiography, pushy language, assumption of response.
+PHASE 2 (the email): Write it.
 
-Respond ONLY with valid JSON (no markdown):
+CONTEXT — why this is hard:
+Recipient is a current employee. They don't know the sender. They get cold messages all the time. They will only refer if:
+(a) the sender clearly fits the role on technical grounds, AND
+(b) the sender feels like a real person, not a bot, AND
+(c) the ask is low-friction and the sender has done the homework.
+
+GOOD STYLE EXAMPLE — match this tone, length, confidence:
+"""
+Subject: Quick referral ask — SDE-2 role at Acme
+
+Hi Priya,
+
+Reaching out cold — apologies for the cold email. I came across the SDE-2 (Backend) role at Acme and noticed your work on the payments platform, which is exactly the area I'd love to contribute to.
+
+A bit about me: I've been building backend services in Go and Python for the past three years, including a payments rails project at my current company that processes ~2M txns/day. I focused on reliability and observability — exactly what your posting calls out.
+
+Specifically, I match the role on:
+• Go + Python backends with high-throughput services (your stack)
+• Distributed systems and queueing (Kafka, Redis)
+• Hands-on with PCI-aware payment flows
+
+Would you be open to forwarding my resume internally? I've attached it here. Happy to share more context or a 5-minute Loom walkthrough of relevant projects if that helps.
+
+No pressure either way — appreciate you even reading this.
+
+Best regards,
+Ankit Rai
+"""
+
+HARD RULES — DO NOT VIOLATE:
+1. Length: 150-220 words. Skim-friendly.
+2. **Mirror exact keywords** from the JOB POSTING when they map to sender's real skills. No paraphrasing.
+3. Use the recipient's first name from email (e.g. "priya.s@x.com" → "Hi Priya,"). If unclear, "Hi there,". NEVER "Dear [Name]" or "To whom it may concern".
+4. Open by acknowledging cold outreach respectfully — ONCE. Then ONE genuine reason for picking THIS person if context allows (their domain, team, posting). If no real reason, skip the flattery and go straight to the ask.
+5. State the role + company explicitly in P1 or P2. No vague "I saw an opportunity".
+6. Use a SHORT bullet list (3 bullets max) of "why I match" — concrete skills/projects mirroring posting language. This is the visual hook that makes scannability easy.
+7. Show EVIDENCE not claims: "shipped X with Y impact" beats "experienced in X". If sender pitch has numbers, use them. Never fabricate.
+8. Make the ask LOW-friction: resume attached + offer to do the legwork (share more details, walkthrough, etc.).
+9. End with gratitude + zero pressure ("no pressure either way" or similar).
+10. NO buzzwords (passionate, rockstar, ninja, leverage). NO desperation. NO "I'd love to learn".
+11. NEVER use placeholders like "[role]", "[company]", "[name]". If a value is missing, write naturally around it.
+12. Subject: short and clear, e.g. "Quick referral ask — [Role] at [Company]" or "Referral for [Role] role at [Company]". No emojis.
+
+STRUCTURE (4-5 short paragraphs):
+P1 (1-2 sent): Cold intro acknowledged + ONE specific reason you picked them OR the role.
+P2 (2-3 sent): Brief credibility line — your years/stack + ONE concrete project that matches posting language.
+P3 (bullets, 3 lines): "Specifically, I match the role on:" — three concrete matches. Mirror posting keywords.
+P4 (1-2 sent): The ask — would they forward internally? MUST mention attached resume by filename if provided (e.g. "Resume attached (Ankit_Rai_Mar.pdf)") + offer to make it easy (share more details, quick call/Loom, etc.).
+P5 (1 sent): No pressure + sincere thank you. Sign with FIRST + LAST name.
+
+Respond ONLY with valid JSON (no markdown, no code fences):
 {"subject":"...","body":"..."}`;
 
     const prompt = mode === "referral" ? referralPrompt : applyPrompt;
@@ -1296,9 +1455,25 @@ Respond ONLY with valid JSON (no markdown):
               <div className="panel">
                 <div className="ph">
                   <span className="pt">Send History</span>
-                  {history.length > 0 && (
-                    <button className="hi-clr" onClick={clearHistory}>Clear all</button>
-                  )}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      className="hi-clr"
+                      onClick={async () => {
+                        if (!user) return;
+                        try {
+                          const hRef = collection(db, "users", user.uid, "history");
+                          const hSnap = await getDocs(query(hRef, orderBy("sentAt", "desc"), limit(200)));
+                          const docs = hSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                          setHistory(docs);
+                          showToast(`Loaded ${docs.length} entries`, "ok");
+                        } catch (e) { showToast("Refresh failed: " + e.message, "err"); }
+                      }}
+                      style={{ color: "var(--blue)" }}
+                    >↻ Refresh</button>
+                    {history.length > 0 && (
+                      <button className="hi-clr" onClick={clearHistory}>Clear all</button>
+                    )}
+                  </div>
                 </div>
                 <div className="pb">
                   {history.length === 0 ? (
@@ -1530,6 +1705,17 @@ Respond ONLY with valid JSON (no markdown):
                 <div className="ph">
                   <span className="pt">Inbox</span>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <button
+                      className="hi-clr"
+                      onClick={async () => {
+                        try {
+                          const { inbox } = await waFetch("/wa/inbox");
+                          syncInbox(inbox || []);
+                          showToast(`Refreshed: ${(inbox || []).filter(x => x.status === "pending").length} pending`, "ok");
+                        } catch (e) { showToast("Refresh failed: " + e.message, "err"); }
+                      }}
+                      style={{ color: "var(--blue)" }}
+                    >↻ Refresh</button>
                     <button className="inbox-apply" onClick={() => setManualOpen(true)} style={{ fontSize: 9, padding: "3px 8px", background: "var(--blue-dim)", borderColor: "var(--blue-glow)", color: "var(--blue)" }}>
                       + Add
                     </button>
@@ -1550,17 +1736,14 @@ Respond ONLY with valid JSON (no markdown):
                   ) : (
                     <div className="hlist">
                       {waInbox.filter(x => x.status === "pending").map(item => (
-                        <div key={item.id} className="inbox-item">
+                        <div
+                          key={item.id}
+                          className="inbox-item"
+                          style={{ cursor: "pointer" }}
+                          onClick={() => { console.log("[inbox] open detail", item.id); setInboxPreview(item); }}
+                        >
                           <div className="hi-row">
                             <div className="hi-co">{item.company || item.jobTitle || item.email}</div>
-                            <button
-                              type="button"
-                              title="View details"
-                              onClick={e => { e.preventDefault(); e.stopPropagation(); setInboxPreview(item); }}
-                              style={{ background: "var(--s3)", border: "1px solid var(--b2)", borderRadius: 6, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 12, color: "var(--t2)", flexShrink: 0, transition: "all .15s" }}
-                              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.color = "var(--blue)"; }}
-                              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--b2)"; e.currentTarget.style.color = "var(--t2)"; }}
-                            >⛶</button>
                             <div className="hi-time">{fmtRelTime(item.ts)}</div>
                           </div>
                           <div className="hi-email">{item.email}</div>
@@ -1569,9 +1752,9 @@ Respond ONLY with valid JSON (no markdown):
                           <div style={{ fontSize: 9, fontFamily: "var(--mono)", color: "var(--t4)" }}>
                             from: {item.groupName}
                           </div>
-                          <div className="inbox-acts">
-                            <button className="inbox-apply" type="button" onClick={() => inboxApply(item)}>✓ Apply</button>
-                            <button className="inbox-dismiss" type="button" onClick={() => inboxDismiss(item.id)}>✗ Skip</button>
+                          <div className="inbox-acts" onClick={e => e.stopPropagation()}>
+                            <button className="inbox-apply" type="button" onClick={e => { e.stopPropagation(); inboxApply(item); }}>✓ Apply</button>
+                            <button className="inbox-dismiss" type="button" onClick={e => { e.stopPropagation(); inboxDismiss(item.id); }}>✗ Skip</button>
                           </div>
                         </div>
                       ))}
@@ -1663,8 +1846,18 @@ Respond ONLY with valid JSON (no markdown):
                   <button
                     className="savebtn"
                     onClick={() => {
+                      // Trim whitespace/newlines that get pasted accidentally
+                      const cleaned = { claude: (apiKeys.claude || "").trim(), openai: (apiKeys.openai || "").trim() };
+                      // Light validation
+                      if (cleaned.claude && !cleaned.claude.startsWith("sk-ant-")) {
+                        showToast("Claude key should start with 'sk-ant-'", "err"); return;
+                      }
+                      if (cleaned.openai && !cleaned.openai.startsWith("sk-")) {
+                        showToast("OpenAI key should start with 'sk-'", "err"); return;
+                      }
+                      setApiKeys(cleaned);
                       try {
-                        localStorage.setItem(`hr_apikeys_${user.uid}`, JSON.stringify(apiKeys));
+                        localStorage.setItem(`hr_apikeys_${user.uid}`, JSON.stringify(cleaned));
                         showToast("API keys saved locally", "ok");
                       } catch (e) { showToast("Save failed: " + e.message, "err"); }
                     }}
@@ -1829,7 +2022,7 @@ Respond ONLY with valid JSON (no markdown):
       </div>
 
       {previewRec && (
-        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setPreviewRec(null) }}>
+        <div className="mbg" onClick={e => { if (e.target === e.currentTarget) setPreviewRec(null) }}>
           <div className="modal">
             <div className="mhd">
               <div className="mico">✉️</div>
@@ -1856,7 +2049,7 @@ Respond ONLY with valid JSON (no markdown):
       )}
 
       {manualOpen && (
-        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setManualOpen(false) }}>
+        <div className="mbg" onClick={e => { if (e.target === e.currentTarget) setManualOpen(false) }}>
           <div className="modal">
             <div className="mhd">
               <div className="mico">➕</div>
@@ -1876,6 +2069,10 @@ Respond ONLY with valid JSON (no markdown):
                 onClick={() => setManualMode("bulk")}
                 style={{ flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid", borderColor: manualMode === "bulk" ? "var(--blue)" : "var(--b1)", background: manualMode === "bulk" ? "var(--blue-dim)" : "var(--s2)", color: manualMode === "bulk" ? "var(--blue)" : "var(--t3)", fontSize: 12, fontWeight: 500 }}
               >Bulk</button>
+              <button
+                onClick={() => setManualMode("file")}
+                style={{ flex: 1, padding: "7px 10px", borderRadius: 6, border: "1px solid", borderColor: manualMode === "file" ? "var(--blue)" : "var(--b1)", background: manualMode === "file" ? "var(--blue-dim)" : "var(--s2)", color: manualMode === "file" ? "var(--blue)" : "var(--t3)", fontSize: 12, fontWeight: 500 }}
+              >📎 File</button>
             </div>
 
             <div className="mbdy" style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, fontFamily: "var(--sans)" }}>
@@ -1898,7 +2095,7 @@ Respond ONLY with valid JSON (no markdown):
                     <textarea value={manualForm.note} onChange={e => setManualForm(f => ({ ...f, note: e.target.value }))} placeholder="Context — referral, requirements, etc." style={{ minHeight: 60 }} />
                   </div>
                 </>
-              ) : (
+              ) : manualMode === "bulk" ? (
                 <>
                   <div className="fl">
                     <label className="flb">Paste emails (one per line, or comma/semicolon separated)</label>
@@ -1916,6 +2113,70 @@ Respond ONLY with valid JSON (no markdown):
                     </div>
                   </div>
                 </>
+              ) : (
+                /* File mode */
+                <>
+                  <div className="fl">
+                    <label className="flb">
+                      <span>Upload PDF or screenshot</span>
+                      <span className="opt">Claude reads and extracts</span>
+                    </label>
+                    <input
+                      ref={extractFileRef}
+                      type="file"
+                      accept="image/*,application/pdf"
+                      style={{ display: "none" }}
+                      onChange={e => {
+                        const f = e.target.files?.[0];
+                        if (f) { setExtractFile(f); runExtract(f); }
+                      }}
+                    />
+                    <div
+                      className="dz"
+                      onClick={() => extractFileRef.current?.click()}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => {
+                        e.preventDefault();
+                        const f = e.dataTransfer.files?.[0];
+                        if (f) { setExtractFile(f); runExtract(f); }
+                      }}
+                      style={{ padding: 24 }}
+                    >
+                      <div className="dz-ico">{extractLoading ? <span className="spin">⟳</span> : extractFile ? "📄" : "📁"}</div>
+                      <div className="dz-txt">
+                        {extractLoading ? <em>Reading with Claude Vision…</em>
+                          : extractFile ? <><b style={{ color: "var(--text)" }}>{extractFile.name}</b><br />click to choose another</>
+                          : <><em>Click to upload</em> or drag PDF / screenshot<br />Job posting, flyer, JD doc — anything with HR emails</>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {extractItems.length > 0 && (
+                    <div className="fl">
+                      <label className="flb">Found {extractItems.length} HR contact{extractItems.length !== 1 ? "s" : ""} — uncheck to skip</label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflowY: "auto" }}>
+                        {extractItems.map((it, i) => (
+                          <label key={i} style={{ display: "flex", gap: 10, padding: "10px 12px", background: it._selected ? "var(--blue-dim)" : "var(--s2)", border: "1px solid", borderColor: it._selected ? "rgba(47,129,247,.4)" : "var(--b1)", borderRadius: 8, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={it._selected}
+                              onChange={() => setExtractItems(p => p.map((x, j) => j === i ? { ...x, _selected: !x._selected } : x))}
+                              style={{ marginTop: 2 }}
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+                                {it.company || it.jobTitle || it.email}
+                              </div>
+                              {it.jobTitle && it.company && <div style={{ fontSize: 11, color: "var(--t2)" }}>{it.jobTitle}</div>}
+                              <div style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)" }}>{it.email}</div>
+                              {it.snippet && <div style={{ fontSize: 10, color: "var(--t3)", marginTop: 4, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{it.snippet}</div>}
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -1928,8 +2189,8 @@ Respond ONLY with valid JSON (no markdown):
       )}
 
       {inboxPreview && (
-        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setInboxPreview(null) }}>
-          <div className="modal">
+        <div className="mbg" onClick={e => { if (e.target === e.currentTarget) setInboxPreview(null) }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="mhd">
               <div className="mico">📨</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -1988,7 +2249,7 @@ Respond ONLY with valid JSON (no markdown):
       )}
 
       {historyPreview && (
-        <div className="mbg" onClick={e => { if (e.target.className === "mbg") setHistoryPreview(null) }}>
+        <div className="mbg" onClick={e => { if (e.target === e.currentTarget) setHistoryPreview(null) }}>
           <div className="modal">
             <div className="mhd">
               <div className="mico">{historyPreview.status === "sent" ? "✉️" : "⚠️"}</div>

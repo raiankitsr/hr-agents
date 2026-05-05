@@ -123,13 +123,17 @@ async function extractTextFromImage(base64Data, mimeType) {
 // Route incoming live messages to the WA session owner's inbox (if group is watched).
 async function handleMessage(msg) {
   try {
-    const chat = await msg.getChat();
-    if (!chat.isGroup) return;
+    // Skip non-group messages early without calling getChat() (which is fragile)
+    if (!msg.from || !msg.from.endsWith("@g.us")) return;
     const ownerId = state.ownerUserId;
     if (!ownerId) return;
     const u = userState(ownerId);
-    if (!u.watchedGroups.includes(chat.id._serialized)) return;
+    if (!u.watchedGroups.includes(msg.from)) return;
     if (u.seenMessageIds.includes(msg.id._serialized)) return;
+
+    let chat;
+    try { chat = await msg.getChat(); } catch { /* getChat sometimes fails on stale state */ }
+    if (!chat || !chat.isGroup) return;
 
     u.seenMessageIds.push(msg.id._serialized);
 
@@ -363,15 +367,21 @@ async function processGroup(userId, groupId, roleFilter) {
   if (!groupMeta) throw new Error("Group not found — try refreshing groups");
 
   // Bypass chat.fetchMessages() which crashes on current WhatsApp Web.
-  // Instead, query WhatsApp's internal message store directly via Puppeteer.
+  // Query WhatsApp's internal store via Puppeteer and aggressively load history.
   const thirtyDaysAgo = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
   const rawMessages = await client.pupPage.evaluate(async (gid, since) => {
     const chatWid = window.Store.WidFactory.createWid(gid);
     const chat = await window.Store.Chat.find(chatWid);
-    // Load more messages from server
-    try { await chat.loadEarlierMsgs(); } catch {}
-    try { await chat.loadEarlierMsgs(); } catch {}
-    try { await chat.loadEarlierMsgs(); } catch {}
+
+    // Load up to 8 batches of earlier messages to cover ~30 days
+    for (let i = 0; i < 8; i++) {
+      const before = chat.msgs.length;
+      try { await chat.loadEarlierMsgs(); } catch { break; }
+      const after = chat.msgs.length;
+      if (after === before) break;
+      const oldest = chat.msgs.getModelsArray()[0];
+      if (oldest && oldest.t < since) break;
+    }
 
     const msgs = chat.msgs.getModelsArray();
     return msgs
@@ -382,7 +392,7 @@ async function processGroup(userId, groupId, roleFilter) {
         timestamp: m.t,
         author: m.author || "",
         notifyName: m.notifyName || "",
-        type: m.type || "chat",          // "image", "chat", "document", etc.
+        type: m.type || "chat",
         hasMedia: !!(m.mediaData && m.type === "image"),
       }));
   }, groupId, thirtyDaysAgo);
