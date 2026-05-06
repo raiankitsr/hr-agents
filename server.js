@@ -45,23 +45,28 @@ function resolveAttachments(list) {
   return resolved;
 }
 
-// Send single email
+// Send single email — per-user Gmail credentials (BYOG).
+// Each user supplies their own GMAIL_USER + APP_PASSWORD via the request body.
+// Falls back to env vars only if not provided (admin/dev use).
 app.post("/send", async (req, res) => {
-  const { to, subject, body, replyTo, fromName, attachments } = req.body;
+  const { to, subject, body, replyTo, fromName, attachments, gmailUser, gmailAppPassword } = req.body;
 
   if (!to || !subject || !body) {
     return res.status(400).json({ error: "Missing required fields: to, subject, body" });
   }
 
-  console.log(`[send] to=${to} attachments-incoming=${JSON.stringify(attachments || [])}`);
+  const sender = (gmailUser || process.env.GMAIL_USER || "").trim();
+  const password = (gmailAppPassword || process.env.GMAIL_APP_PASSWORD || "").replace(/\s+/g, "");
+  if (!sender || !password) {
+    return res.status(400).json({ error: "No Gmail credentials. Add yours in Settings → Email." });
+  }
+
+  console.log(`[send] from=${sender} to=${to} attachments-incoming=${JSON.stringify(attachments || [])}`);
 
   try {
     const transporter = nodemailer.createTransport({
       service: "gmail",
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
+      auth: { user: sender, pass: password },
     });
 
     const resolvedAtts = resolveAttachments(attachments);
@@ -69,9 +74,9 @@ app.post("/send", async (req, res) => {
     if (resolvedAtts.length) console.log(`[send] paths: ${resolvedAtts.map(a => a.path).join(", ")}`);
 
     const info = await transporter.sendMail({
-      from: `"${fromName || process.env.GMAIL_USER}" <${process.env.GMAIL_USER}>`,
+      from: `"${fromName || sender}" <${sender}>`,
       to,
-      replyTo: replyTo || process.env.GMAIL_USER,
+      replyTo: replyTo || sender,
       subject,
       text: body,
       attachments: resolvedAtts,
@@ -86,20 +91,22 @@ app.post("/send", async (req, res) => {
 
 // Send batch emails
 app.post("/send-batch", async (req, res) => {
-  const { emails, fromName, replyTo, attachments } = req.body;
+  const { emails, fromName, replyTo, attachments, gmailUser, gmailAppPassword } = req.body;
   const sharedAttachments = resolveAttachments(attachments);
-  // emails = [{ to, subject, body }, ...]
 
   if (!Array.isArray(emails) || !emails.length) {
     return res.status(400).json({ error: "emails array required" });
   }
 
+  const sender = (gmailUser || process.env.GMAIL_USER || "").trim();
+  const password = (gmailAppPassword || process.env.GMAIL_APP_PASSWORD || "").replace(/\s+/g, "");
+  if (!sender || !password) {
+    return res.status(400).json({ error: "No Gmail credentials. Add yours in Settings → Email." });
+  }
+
   const transporter = nodemailer.createTransport({
     service: "gmail",
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD,
-    },
+    auth: { user: sender, pass: password },
   });
 
   const results = [];
@@ -107,9 +114,9 @@ app.post("/send-batch", async (req, res) => {
     try {
       const perEmailAttachments = resolveAttachments(email.attachments);
       const info = await transporter.sendMail({
-        from: `"${fromName || process.env.GMAIL_USER}" <${process.env.GMAIL_USER}>`,
+        from: `"${fromName || sender}" <${sender}>`,
         to: email.to,
-        replyTo: replyTo || process.env.GMAIL_USER,
+        replyTo: replyTo || sender,
         subject: email.subject,
         text: email.body,
         attachments: perEmailAttachments.length ? perEmailAttachments : sharedAttachments,

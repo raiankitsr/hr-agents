@@ -415,9 +415,10 @@ export default function HRAgent({ user, onSignOut }) {
   const [extractLoading, setExtractLoading] = useState(false);
   const extractFileRef = useRef();
   const [heroVisible, setHeroVisible] = useState(true);
-  const [apiKeys, setApiKeys] = useState({ claude: "", openai: "" });
+  const [apiKeys, setApiKeys] = useState({ claude: "", openai: "", gmailUser: "", gmailAppPassword: "" });
   const [showClaudeKey, setShowClaudeKey] = useState(false);
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
+  const [showGmailPwd, setShowGmailPwd] = useState(false);
   const [waStatus, setWaStatus] = useState({ status: "idle", qrDataUrl: null, watchedGroups: [], inboxCount: 0 });
   const [waGroups, setWaGroups] = useState([]);
   const [waInbox, setWaInbox] = useState([]);
@@ -480,8 +481,8 @@ export default function HRAgent({ user, onSignOut }) {
       try {
         const raw = localStorage.getItem(`hr_apikeys_${user.uid}`);
         if (raw) setApiKeys(JSON.parse(raw));
-        else setApiKeys({ claude: "", openai: "" });
-      } catch { setApiKeys({ claude: "", openai: "" }); }
+        else setApiKeys({ claude: "", openai: "", gmailUser: "", gmailAppPassword: "" });
+      } catch { setApiKeys({ claude: "", openai: "", gmailUser: "", gmailAppPassword: "" }); }
 
       // Load user-scoped profile from Firestore
       let loadedProfile = null;
@@ -1100,6 +1101,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   };
 
   const sendViaServer = async (rec) => {
+    const gmailUser = (apiKeys.gmailUser || "").trim();
+    const gmailAppPassword = (apiKeys.gmailAppPassword || "").replace(/\s+/g, "");
+    if (!gmailUser || !gmailAppPassword) {
+      throw new Error("Connect your Gmail in Settings → API Keys before sending.");
+    }
     const res = await fetch(`${API_BASE}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1108,8 +1114,10 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         subject: rec.subject,
         body: rec.body,
         fromName: profile.name || undefined,
-        replyTo: profile.replyTo || undefined,
+        replyTo: profile.replyTo || gmailUser,
         attachments: attachments.map(a => ({ name: a.name, filename: a.filename })),
+        gmailUser,
+        gmailAppPassword,
       }),
     });
     const data = await res.json();
@@ -1798,6 +1806,59 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   <span><b>Stored in your browser only.</b> Never sent to our servers or synced to the cloud. Clears on sign-out.</span>
                 </div>
 
+                {/* Gmail credentials — required to send */}
+                <div className="fl">
+                  <label className="flb">
+                    <span>Your Gmail Address</span>
+                    <span className="opt">used as sender</span>
+                  </label>
+                  <div className="key-row">
+                    <input
+                      type="email"
+                      value={apiKeys.gmailUser}
+                      onChange={e => setApiKeys(k => ({ ...k, gmailUser: e.target.value }))}
+                      placeholder="you@gmail.com"
+                      name="gmail-user-input"
+                      autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
+                    />
+                  </div>
+                </div>
+
+                <div className="fl">
+                  <label className="flb">
+                    <span>Gmail App Password</span>
+                    <span className="opt">16 chars, no spaces</span>
+                  </label>
+                  <div className="key-row">
+                    <input
+                      type={showGmailPwd ? "text" : "password"}
+                      value={apiKeys.gmailAppPassword}
+                      onChange={e => setApiKeys(k => ({ ...k, gmailAppPassword: e.target.value }))}
+                      placeholder="abcd efgh ijkl mnop"
+                      name="gmail-app-password-input"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      data-1p-ignore
+                      data-lpignore="true"
+                    />
+                    <button className="key-eye" type="button" onClick={() => setShowGmailPwd(s => !s)} title={showGmailPwd ? "Hide" : "Show"}>
+                      {showGmailPwd ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  </div>
+                  <div className={`key-status ${apiKeys.gmailAppPassword ? "set" : "empty"}`}>
+                    <span className="key-status-dot" />
+                    {apiKeys.gmailAppPassword ? "Saved" : "Not set — required to send"}
+                    {" · "}
+                    <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer" style={{ color: "var(--blue)", textDecoration: "none" }}>generate one ↗</a>
+                  </div>
+                </div>
+
                 <div className="fl">
                   <label className="flb">
                     <span>Claude API Key</span>
@@ -1874,31 +1935,40 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   <button
                     className="savebtn"
                     onClick={() => {
-                      // Trim whitespace/newlines that get pasted accidentally
-                      const cleaned = { claude: (apiKeys.claude || "").trim(), openai: (apiKeys.openai || "").trim() };
-                      // Light validation
+                      const cleaned = {
+                        claude: (apiKeys.claude || "").trim(),
+                        openai: (apiKeys.openai || "").trim(),
+                        gmailUser: (apiKeys.gmailUser || "").trim(),
+                        gmailAppPassword: (apiKeys.gmailAppPassword || "").replace(/\s+/g, ""),
+                      };
                       if (cleaned.claude && !cleaned.claude.startsWith("sk-ant-")) {
                         showToast("Claude key should start with 'sk-ant-'", "err"); return;
                       }
                       if (cleaned.openai && !cleaned.openai.startsWith("sk-")) {
                         showToast("OpenAI key should start with 'sk-'", "err"); return;
                       }
+                      if (cleaned.gmailUser && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned.gmailUser)) {
+                        showToast("Gmail address looks invalid", "err"); return;
+                      }
+                      if (cleaned.gmailAppPassword && cleaned.gmailAppPassword.length !== 16) {
+                        showToast("Gmail App Password is exactly 16 chars (no spaces)", "err"); return;
+                      }
                       setApiKeys(cleaned);
                       try {
                         localStorage.setItem(`hr_apikeys_${user.uid}`, JSON.stringify(cleaned));
-                        showToast("API keys saved locally", "ok");
+                        showToast("Saved locally", "ok");
                       } catch (e) { showToast("Save failed: " + e.message, "err"); }
                     }}
                     style={{ flex: 1 }}
                   >
-                    🔒 Save Keys
+                    🔒 Save
                   </button>
-                  {(apiKeys.claude || apiKeys.openai) && (
+                  {(apiKeys.claude || apiKeys.openai || apiKeys.gmailUser || apiKeys.gmailAppPassword) && (
                     <button
                       className="savebtn"
                       onClick={() => {
                         if (!confirm("Remove both API keys from this browser?")) return;
-                        setApiKeys({ claude: "", openai: "" });
+                        setApiKeys({ claude: "", openai: "", gmailUser: "", gmailAppPassword: "" });
                         try { localStorage.removeItem(`hr_apikeys_${user.uid}`); } catch { }
                         showToast("Keys cleared", "ok");
                       }}
