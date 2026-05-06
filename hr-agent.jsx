@@ -437,6 +437,20 @@ export default function HRAgent({ user, onSignOut }) {
     try { localStorage.removeItem("hr_profile"); localStorage.removeItem("hr_server"); } catch { }
   }, []);
 
+  // Re-check backend health every 20s — keeps the hero status indicator accurate
+  // (e.g. recovers from "Connecting…" once backend boots)
+  useEffect(() => {
+    const ping = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/healthz`, { signal: AbortSignal.timeout(4000) });
+        const data = await res.json();
+        setServerReady(data?.status === "ok");
+      } catch { setServerReady(false); }
+    };
+    const iv = setInterval(ping, 20000);
+    return () => clearInterval(iv);
+  }, []);
+
   useEffect(() => {
     (async () => {
       // Reset per-user state when a different user logs in
@@ -1661,6 +1675,14 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                               onChange={e => setWaRoleFilter(e.target.value)}
                               placeholder="e.g. Frontend Developer, React, SDE"
                               style={{ fontSize: 12 }}
+                              type="text"
+                              name="wa-role-filter"
+                              autoComplete="off"
+                              autoCapitalize="off"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              data-1p-ignore
+                              data-lpignore="true"
                             />
                             <div className="flh">Only messages matching these keywords will be scanned. Leave empty for all.</div>
                           </div>
@@ -1787,8 +1809,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                       value={apiKeys.claude}
                       onChange={e => setApiKeys(k => ({ ...k, claude: e.target.value }))}
                       placeholder="sk-ant-..."
-                      autoComplete="off"
+                      name="claude-api-key-input"
+                      autoComplete="new-password"
                       spellCheck={false}
+                      data-1p-ignore
+                      data-lpignore="true"
                     />
                     <button className="key-eye" type="button" onClick={() => setShowClaudeKey(s => !s)} title={showClaudeKey ? "Hide" : "Show"}>
                       {showClaudeKey ? (
@@ -1820,8 +1845,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                       value={apiKeys.openai}
                       onChange={e => setApiKeys(k => ({ ...k, openai: e.target.value }))}
                       placeholder="sk-..."
-                      autoComplete="off"
+                      name="openai-api-key-input"
+                      autoComplete="new-password"
                       spellCheck={false}
+                      data-1p-ignore
+                      data-lpignore="true"
                     />
                     <button className="key-eye" type="button" onClick={() => setShowOpenaiKey(s => !s)} title={showOpenaiKey ? "Hide" : "Show"}>
                       {showOpenaiKey ? (
