@@ -909,7 +909,7 @@ export default function HRAgent({ user, onSignOut }) {
   };
 
   const inboxApplyAll = async () => {
-    const pending = waInbox.filter(x => x.status === "pending");
+    const pending = visibleInbox;
     if (!pending.length) return;
     for (const item of pending) {
       await inboxApply(item);
@@ -917,7 +917,25 @@ export default function HRAgent({ user, onSignOut }) {
     showToast(`Added ${pending.length} recipients`, "ok");
   };
 
-  const pendingInboxCount = waInbox.filter(x => x.status === "pending").length;
+  // Skip inbox items only when the SAME email + SAME role has already been actioned.
+  // Same recruiter posting a different role later should still show up.
+  const itemKey = (e = "", t = "", n = "") => {
+    const email = e.toLowerCase().trim();
+    const role = (t || "").toLowerCase().trim();
+    const fallback = role || (n || "").toLowerCase().trim().slice(0, 80);
+    return `${email}::${fallback}`;
+  };
+  const skippedKeys = new Set(
+    [
+      ...history.map(h => itemKey(h.email, h.jobTitle, h.subject || h.body)),
+      ...failedMails.map(f => itemKey(f.email, f.jobTitle, f.subject || f.body)),
+      ...recipients.map(r => itemKey(r.email, r.jobTitle, r.note)),
+    ].filter(k => k && !k.endsWith("::"))
+  );
+  const visibleInbox = waInbox.filter(x =>
+    x.status === "pending" && !skippedKeys.has(itemKey(x.email, x.jobTitle, x.snippet))
+  );
+  const pendingInboxCount = visibleInbox.length;
   const failedCount = failedMails.filter(r => r.status === "failed").length;
 
   const upd = (id, k, v) => setRecipients(p => p.map(r => r.id === id ? { ...r, [k]: v } : r));
@@ -1799,7 +1817,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                     </div>
                   ) : (
                     <div className="hlist">
-                      {waInbox.filter(x => x.status === "pending").map(item => (
+                      {visibleInbox.map(item => (
                         <div
                           key={item.id}
                           className="inbox-item"
