@@ -276,6 +276,28 @@ app.post("/admin/new-user", async (req, res) => {
   }
 });
 
+// ── Cover Letter generation (returns a PDF in uploads/) ───────────
+const coverLetter = require("./cover-letter");
+
+app.post("/cover-letter", async (req, res) => {
+  const { profile, recipient, jobTitle, company, jobPosting, modelType } = req.body || {};
+  if (!profile || !profile.name) return res.status(400).json({ error: "Profile required" });
+
+  const apiKey = req.header("x-anthropic-key") || req.header("x-openai-key") || undefined;
+
+  try {
+    const result = await coverLetter.generate({
+      profile, recipient, jobTitle, company, jobPosting,
+      apiKey, modelType,
+      outputDir: path.join(__dirname, "uploads"),
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("Cover letter error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── WhatsApp endpoints ──────────────────────────────────────────────
 const wa = require("./wa-service");
 
@@ -451,7 +473,7 @@ app.post("/discover", async (req, res) => {
 const DIST_DIR = path.join(__dirname, "dist");
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-  app.get(/^\/(?!send|send-batch|generate|upload|uploads|wa|discover|admin|healthz).*/, (req, res) => {
+  app.get(/^\/(?!send|send-batch|generate|upload|uploads|wa|discover|admin|healthz|cover-letter).*/, (req, res) => {
     res.sendFile(path.join(DIST_DIR, "index.html"));
   });
 }

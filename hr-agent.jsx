@@ -392,7 +392,7 @@ export default function HRAgent({ user, onSignOut }) {
   const [drag, setDrag] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [recipients, setRecipients] = useState([
-    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }
+    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }
   ]);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -460,7 +460,7 @@ export default function HRAgent({ user, onSignOut }) {
       setAttachments([]);
       setHistory([]);
       setFailedMails([]);
-      setRecipients([{ id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }]);
+      setRecipients([{ id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }]);
       setNeedsOnboarding(false);
       setWaInbox([]);
       setWaGroups([]);
@@ -897,7 +897,7 @@ export default function HRAgent({ user, onSignOut }) {
     await waFetch(`/wa/inbox/${item.id}/apply`, { method: "POST" });
     setWaInbox(p => p.filter(x => x.id !== item.id));
     removePersistedInbox(item.id);
-    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" };
+    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false };
     setRecipients(p => [...p, newRec]);
     showToast(`Added ${item.email} to recipients`, "ok");
   };
@@ -921,7 +921,7 @@ export default function HRAgent({ user, onSignOut }) {
   const failedCount = failedMails.filter(r => r.status === "failed").length;
 
   const upd = (id, k, v) => setRecipients(p => p.map(r => r.id === id ? { ...r, [k]: v } : r));
-  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply" }]);
+  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }]);
   const rmRec = id => setRecipients(p => p.filter(r => r.id !== id));
 
   const generateEmail = async rec => {
@@ -1100,12 +1100,46 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     return JSON.parse(clean);
   };
 
+  // Generate a cover letter PDF for this recipient. Returns an attachment descriptor.
+  const generateCoverLetter = async (rec) => {
+    const apiKey = rec.preferAi === "openai" ? apiKeys.openai : apiKeys.claude;
+    const res = await fetch(`${API_BASE}/cover-letter`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? (rec.preferAi === "openai" ? { "x-openai-key": apiKey } : { "x-anthropic-key": apiKey }) : {}),
+      },
+      body: JSON.stringify({
+        profile,
+        recipient: rec.email,
+        jobTitle: rec.jobTitle,
+        company: rec.company,
+        jobPosting: rec.note || "",
+        modelType: rec.preferAi,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Cover letter generation failed");
+    return { name: data.displayName, filename: data.filename };
+  };
+
   const sendViaServer = async (rec) => {
     const gmailUser = (apiKeys.gmailUser || "").trim();
     const gmailAppPassword = (apiKeys.gmailAppPassword || "").replace(/\s+/g, "");
     if (!gmailUser || !gmailAppPassword) {
       throw new Error("Connect your Gmail in Settings → API Keys before sending.");
     }
+
+    let allAttachments = attachments.map(a => ({ name: a.name, filename: a.filename }));
+    if (rec.coverLetter) {
+      try {
+        const cl = await generateCoverLetter(rec);
+        allAttachments = [...allAttachments, cl];
+      } catch (e) {
+        throw new Error(`Cover letter failed: ${e.message}`);
+      }
+    }
+
     const res = await fetch(`${API_BASE}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1115,7 +1149,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         body: rec.body,
         fromName: profile.name || undefined,
         replyTo: profile.replyTo || gmailUser,
-        attachments: attachments.map(a => ({ name: a.name, filename: a.filename })),
+        attachments: allAttachments,
         gmailUser,
         gmailAppPassword,
       }),
@@ -2044,6 +2078,34 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                       <button className={`tab ${r.preferAi === "claude" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "claude")}>Claude</button>
                       <button className={`tab ${r.preferAi === "openai" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "openai")}>ChatGPT</button>
                     </div>
+
+                    {/* Cover Letter PDF toggle */}
+                    <button
+                      type="button"
+                      title={r.coverLetter ? "Cover letter PDF will be attached" : "Add cover letter PDF"}
+                      onClick={() => upd(r.id, "coverLetter", !r.coverLetter)}
+                      disabled={running}
+                      style={{
+                        height: 26,
+                        padding: "0 10px",
+                        fontSize: 10,
+                        fontFamily: "var(--mono)",
+                        fontWeight: 600,
+                        borderRadius: 6,
+                        border: "1px solid",
+                        borderColor: r.coverLetter ? "rgba(163,113,247,.5)" : "var(--b1)",
+                        background: r.coverLetter ? "var(--purple-dim)" : "var(--bg)",
+                        color: r.coverLetter ? "var(--purple)" : "var(--t3)",
+                        cursor: running ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        whiteSpace: "nowrap",
+                        marginRight: 8,
+                      }}
+                    >
+                      {r.coverLetter ? "📄 +CL" : "+ CL"}
+                    </button>
 
                     <span className={`rst ${r.status}`}>
                       {(r.status === "active" || r.status === "sending") && <span className="spin">⟳</span>}

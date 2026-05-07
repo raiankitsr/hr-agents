@@ -18,6 +18,7 @@ export default defineConfig({
       "/wa": "http://localhost:3001",
       "/discover": "http://localhost:3001",
       "/admin": "http://localhost:3001",
+      "/cover-letter": "http://localhost:3001",
     },
   },
 });
