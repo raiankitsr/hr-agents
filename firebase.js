@@ -21,4 +21,9 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Request gmail.readonly so we can scan recipient replies in the History tab.
+// User sees a "Read your Gmail" consent prompt on first sign-in.
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope("https://www.googleapis.com/auth/gmail.readonly");
+googleProvider.setCustomParameters({ prompt: "select_account" });

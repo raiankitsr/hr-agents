@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { collection, getDocs, setDoc, doc, deleteDoc, query, orderBy, limit, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import Onboarding from "./Onboarding";
+import { scanReplies } from "./gmail-client";
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@300;400;500&display=swap');`;
 
@@ -404,6 +405,7 @@ export default function HRAgent({ user, onSignOut }) {
   const [sideTab, setSideTab] = useState("profile");
   const [history, setHistory] = useState([]);
   const [historyPreview, setHistoryPreview] = useState(null);
+  const [scanReplyState, setScanReplyState] = useState({ running: false, current: 0, total: 0 });
   const [failedMails, setFailedMails] = useState([]);
   const [inboxPreview, setInboxPreview] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
@@ -612,6 +614,44 @@ export default function HRAgent({ user, onSignOut }) {
       } catch (err) { console.error("History clear error:", err); }
     }
     showToast("History cleared", "ok");
+  };
+
+  // Scan Gmail for replies to sent emails. Persists reply metadata to Firestore.
+  const scanGmailReplies = async () => {
+    if (!user) return;
+    const token = sessionStorage.getItem(`gmail_token_${user.uid}`);
+    if (!token) {
+      showToast("Sign out and back in to authorize Gmail read access", "err");
+      return;
+    }
+    const sentOnly = history.filter(h => h.status === "sent");
+    if (!sentOnly.length) { showToast("No sent emails to scan", "err"); return; }
+
+    setScanReplyState({ running: true, current: 0, total: sentOnly.length });
+    let newReplies = 0;
+    try {
+      const updated = await scanReplies(token, sentOnly, (i, total) => {
+        setScanReplyState({ running: true, current: i, total });
+      });
+
+      // Merge updates back into history and persist
+      const updatedMap = new Map(updated.map(u => [u.id, u]));
+      const merged = history.map(h => {
+        const u = updatedMap.get(h.id);
+        if (u && u.replied && !h.replied) {
+          newReplies++;
+          // Fire-and-forget persistence
+          setDoc(doc(db, "users", user.uid, "history", h.id), u).catch(() => { });
+          return u;
+        }
+        return u || h;
+      });
+      setHistory(merged);
+      showToast(newReplies > 0 ? `Found ${newReplies} new repl${newReplies === 1 ? "y" : "ies"}!` : "No new replies", newReplies > 0 ? "ok" : "inf");
+    } catch (err) {
+      showToast("Scan failed: " + err.message, "err");
+    }
+    setScanReplyState({ running: false, current: 0, total: 0 });
   };
 
   const fmtRelTime = (ts) => {
@@ -1406,6 +1446,10 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   <div className="hero-stat-lbl">Sent</div>
                 </div>
                 <div className="hero-stat">
+                  <div className="hero-stat-val green">{history.filter(h => h.replied).length}</div>
+                  <div className="hero-stat-lbl">Replied</div>
+                </div>
+                <div className="hero-stat">
                   <div className={`hero-stat-val ${failedCount > 0 ? "red" : ""}`}>{failedCount}</div>
                   <div className="hero-stat-lbl">Failed</div>
                 </div>
@@ -1528,8 +1572,27 @@ Respond ONLY with valid JSON (no markdown, no code fences):
             {sideTab === "history" && (
               <div className="panel">
                 <div className="ph">
-                  <span className="pt">Send History</span>
+                  <span className="pt">
+                    Send History
+                    {(() => {
+                      const replied = history.filter(h => h.replied).length;
+                      return replied > 0 ? <span style={{ marginLeft: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--green)", fontWeight: 600, letterSpacing: 0 }}>· {replied} replied</span> : null;
+                    })()}
+                  </span>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {history.some(h => h.status === "sent") && (
+                      <button
+                        className="hi-clr"
+                        onClick={scanGmailReplies}
+                        disabled={scanReplyState.running}
+                        style={{ color: "var(--green)" }}
+                        title="Scan Gmail for replies to your sent emails"
+                      >
+                        {scanReplyState.running
+                          ? `Scanning ${scanReplyState.current}/${scanReplyState.total}…`
+                          : "✦ Scan replies"}
+                      </button>
+                    )}
                     <button
                       className="hi-clr"
                       onClick={async () => {
@@ -1577,6 +1640,20 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                             <span style={{ color: h.status === "sent" ? "var(--green)" : "var(--red)" }}>
                               {h.status === "sent" ? "✓ Delivered" : "✗ Failed"}
                             </span>
+                            {h.replied && (
+                              <span style={{
+                                color: "#fff",
+                                background: "linear-gradient(135deg, #3fb950, #2ea043)",
+                                padding: "1px 7px",
+                                borderRadius: 10,
+                                fontSize: 9,
+                                fontWeight: 700,
+                                letterSpacing: ".3px",
+                                boxShadow: "0 0 8px rgba(63,185,80,.4)",
+                              }} title={`Reply ${h.repliedAt ? fmtRelTime(h.repliedAt) : ""}${h.replySubject ? `: "${h.replySubject}"` : ""}`}>
+                                ✦ REPLIED
+                              </span>
+                            )}
                             {h.attachments?.length > 0 && (
                               <span className="hi-att">📎 {h.attachments.length}</span>
                             )}
@@ -2443,7 +2520,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   <span style={{ color: historyPreview.status === "sent" ? "var(--green)" : "var(--red)" }}>
                     {historyPreview.status === "sent" ? "✓ Delivered" : `✗ ${historyPreview.error || "Failed"}`}
                   </span>
+                  {historyPreview.replied && (
+                    <span style={{ marginLeft: 8, color: "var(--green)", fontWeight: 600 }}>
+                      · ✦ Replied {fmtRelTime(historyPreview.repliedAt)}
+                    </span>
+                  )}
                 </div>
+                {historyPreview.replied && historyPreview.replySubject && (
+                  <div className="mto" style={{ marginTop: 2, fontSize: 10, color: "var(--t2)" }}>
+                    Reply: "{historyPreview.replySubject}"
+                  </div>
+                )}
               </div>
               <button className="mcls" onClick={() => setHistoryPreview(null)}>×</button>
             </div>

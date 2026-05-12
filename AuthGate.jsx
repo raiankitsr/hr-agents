@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { signInWithPopup } from "firebase/auth";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { auth, googleProvider } from "./firebase";
 
 const STYLES = `
@@ -260,6 +260,12 @@ export default function AuthGate({ onUser }) {
     setError("");
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      // Capture Google OAuth access token (needed for Gmail API reply scanning).
+      // Stored in sessionStorage so it survives page reload but not browser close.
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        try { sessionStorage.setItem(`gmail_token_${result.user.uid}`, credential.accessToken); } catch { }
+      }
       onUser(result.user);
     } catch (err) {
       setError(err.message.replace("Firebase: ", ""));
