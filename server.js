@@ -49,7 +49,11 @@ function resolveAttachments(list) {
 // Each user supplies their own GMAIL_USER + APP_PASSWORD via the request body.
 // Falls back to env vars only if not provided (admin/dev use).
 app.post("/send", async (req, res) => {
-  const { to, subject, body, replyTo, fromName, attachments, gmailUser, gmailAppPassword } = req.body;
+  const {
+    to, subject, body, replyTo, fromName, attachments,
+    gmailUser, gmailAppPassword,
+    inReplyTo, references,    // for follow-ups: thread via RFC822 Message-ID
+  } = req.body;
 
   if (!to || !subject || !body) {
     return res.status(400).json({ error: "Missing required fields: to, subject, body" });
@@ -61,7 +65,7 @@ app.post("/send", async (req, res) => {
     return res.status(400).json({ error: "No Gmail credentials. Add yours in Settings → Email." });
   }
 
-  console.log(`[send] from=${sender} to=${to} attachments-incoming=${JSON.stringify(attachments || [])}`);
+  console.log(`[send] from=${sender} to=${to}${inReplyTo ? ` reply-to-msg=${inReplyTo}` : ""} attachments-incoming=${JSON.stringify(attachments || [])}`);
 
   try {
     const transporter = nodemailer.createTransport({
@@ -73,14 +77,18 @@ app.post("/send", async (req, res) => {
     console.log(`[send] resolved ${resolvedAtts.length} of ${(attachments || []).length} attachments`);
     if (resolvedAtts.length) console.log(`[send] paths: ${resolvedAtts.map(a => a.path).join(", ")}`);
 
-    const info = await transporter.sendMail({
+    const mailOpts = {
       from: `"${fromName || sender}" <${sender}>`,
       to,
       replyTo: replyTo || sender,
       subject,
       text: body,
       attachments: resolvedAtts,
-    });
+    };
+    if (inReplyTo) mailOpts.inReplyTo = inReplyTo;
+    if (references) mailOpts.references = references;
+
+    const info = await transporter.sendMail(mailOpts);
 
     res.json({ success: true, messageId: info.messageId });
   } catch (err) {
@@ -273,6 +281,172 @@ app.post("/admin/new-user", async (req, res) => {
     });
   } catch (err) {
     console.error("[admin-notify] failed:", err.message);
+  }
+});
+
+// ── 3-step follow-up text generator ────────────────────────────────
+// Stage 1 (day 5): gentle nudge
+// Stage 2 (day 10): value-add (project link / fresh angle)
+// Stage 3 (day 14): brief final check-in
+app.post("/generate-followup", async (req, res) => {
+  const { profile, original, stage, modelType } = req.body || {};
+  if (!profile || !original) return res.status(400).json({ error: "profile and original required" });
+
+  const apiKey = req.header("x-anthropic-key") || req.header("x-openai-key") || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: "No API key" });
+
+  const daysAgo = Math.max(1, Math.floor((Date.now() - (original.sentAt || Date.now())) / (1000 * 60 * 60 * 24)));
+  const senderLines = [
+    `Name: ${profile.name || ""}`,
+    profile.currentRole && `Current role: ${profile.currentRole}`,
+    profile.skills?.length && `Skills: ${profile.skills.slice(0, 6).join(", ")}`,
+    profile.linkedin && `LinkedIn: ${profile.linkedin}`,
+    profile.portfolio && `Portfolio: ${profile.portfolio}`,
+  ].filter(Boolean).join("\n");
+
+  const baseContext = `RECIPIENT: ${original.email}
+ROLE: ${original.jobTitle || "the role I applied for"}${original.company ? ` at ${original.company}` : ""}
+ORIGINAL SUBJECT: "${original.subject}"
+DAYS SINCE FIRST SENT: ${daysAgo}
+
+ORIGINAL EMAIL BODY (for reference, do NOT repeat):
+"""
+${original.body}
+"""
+
+SENDER PROFILE:
+${senderLines}`;
+
+  const prompts = {
+    1: `Write a SHORT polite first follow-up to a recruiter who hasn't replied yet.
+
+${baseContext}
+
+HARD RULES:
+1. Length: 60-90 words. Tight. Easy to skim.
+2. Opening: "Hi [first name]," — extract from email if obvious, else "Hi there,".
+3. Tone: courteous, low-pressure, gracious. Acknowledge they're busy.
+4. Structure (4-5 sentences max):
+   - Brief, friendly reference to the prior email about the specific role.
+   - Reaffirm genuine interest in this exact role + company.
+   - ONE small new value-add line (highlight one matching skill from profile that's directly role-relevant).
+   - Soft CTA: "Happy to share more details or jump on a quick call at your convenience."
+   - Sign-off + full name.
+5. NEVER use: "just checking in", "circling back" (overused), "bumping this up", "haven't heard back", "wanted to ensure".
+6. NEVER mention this is a follow-up explicitly. Just be natural.
+7. NO buzzwords. NO desperation.
+
+Respond ONLY with valid JSON: {"subject":"Re: [original subject]","body":"..."}`,
+
+    2: `Write a SECOND follow-up that pivots to VALUE. They've seen 1 email + 1 follow-up. This message must NOT feel like another nudge — it should give them a concrete reason to engage.
+
+${baseContext}
+
+HARD RULES:
+1. Length: 80-130 words. Substantive but tight.
+2. Opening: "Hi [first name]," from email; else "Hi there,".
+3. The whole point: SHARE SOMETHING USEFUL — pick the best lever:
+   - Mention a specific project / GitHub repo / portfolio piece that DIRECTLY maps to the role (use profile.portfolio or profile.linkedin links).
+   - OR a relevant insight: "I built X using [tech in posting] and learned Y" — keep it concrete.
+   - OR offer a free Loom walkthrough of a relevant project.
+4. Structure (5-6 sentences):
+   - One-line opener that does NOT apologize for following up.
+   - 2-3 sentences on the value-add (the project/link/insight).
+   - Tie it back to the role at the company.
+   - Close: "If useful, happy to discuss further at your convenience."
+   - Sign-off + full name.
+5. NEVER repeat what was in earlier emails. This is a new angle.
+6. NEVER write "as I mentioned before" or "following up on my previous note" — make it stand alone.
+7. NO buzzwords. NO desperation.
+
+Respond ONLY with valid JSON: {"subject":"Re: [original subject]","body":"..."}`,
+
+    3: `Write a brief FINAL check-in. This is the third and last touch. It must close gracefully — no guilt, no pressure, and leave the door open for the future.
+
+${baseContext}
+
+HARD RULES:
+1. Length: 50-75 words. Very short.
+2. Opening: "Hi [first name]," from email; else "Hi there,".
+3. Structure (3-4 sentences):
+   - Acknowledge this is your last note. Use phrasing like "I'll keep my note brief and not follow up further" — show respect for their time.
+   - State that the interest in the role still stands.
+   - Offer to be reachable later: "If timing isn't right now, happy to reconnect down the line."
+   - Sign-off with thanks + full name.
+4. NEVER guilt-trip, NEVER complain about no reply.
+5. NEVER ask "did you get my email?" — gracious is the only mode here.
+6. NO buzzwords.
+
+Respond ONLY with valid JSON: {"subject":"Re: [original subject]","body":"..."}`,
+  };
+
+  const prompt = prompts[stage] || prompts[1];
+
+  try {
+    let text = "";
+    if (modelType === "openai") {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error?.message || "OpenAI failed");
+      text = j.choices[0].message.content;
+    } else {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error?.message || "Claude failed");
+      text = j.content?.map(c => c.text || "").join("") || "";
+    }
+    const clean = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    res.json({ stage, ...parsed });
+  } catch (err) {
+    console.error("Follow-up gen error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tailored Resume generation (returns a PDF in uploads/) ────────
+const resumeService = require("./resume");
+
+app.post("/resume-tailor", async (req, res) => {
+  const { profile, jobTitle, company, jobPosting, baseResumeFilename } = req.body || {};
+  if (!profile || !profile.name) return res.status(400).json({ error: "Profile required" });
+
+  const apiKey = req.header("x-anthropic-key") || undefined;
+
+  // Resolve the user's base resume PDF on disk (optional but recommended)
+  let basePdfPath = null;
+  if (baseResumeFilename) {
+    const safe = path.basename(baseResumeFilename);
+    const candidate = path.join(__dirname, "uploads", safe);
+    if (fs.existsSync(candidate)) basePdfPath = candidate;
+  }
+
+  try {
+    const result = await resumeService.generate({
+      profile, jobTitle, company, jobPosting,
+      basePdfPath, apiKey,
+      outputDir: path.join(__dirname, "uploads"),
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("Resume tailor error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -473,7 +647,7 @@ app.post("/discover", async (req, res) => {
 const DIST_DIR = path.join(__dirname, "dist");
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-  app.get(/^\/(?!send|send-batch|generate|upload|uploads|wa|discover|admin|healthz|cover-letter).*/, (req, res) => {
+  app.get(/^\/(?!send|send-batch|generate|generate-followup|upload|uploads|wa|discover|admin|healthz|cover-letter|resume-tailor).*/, (req, res) => {
     res.sendFile(path.join(DIST_DIR, "index.html"));
   });
 }

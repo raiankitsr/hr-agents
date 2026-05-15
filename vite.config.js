@@ -19,6 +19,8 @@ export default defineConfig({
       "/discover": "http://localhost:3001",
       "/admin": "http://localhost:3001",
       "/cover-letter": "http://localhost:3001",
+      "/resume-tailor": "http://localhost:3001",
+      "/generate-followup": "http://localhost:3001",
     },
   },
 });

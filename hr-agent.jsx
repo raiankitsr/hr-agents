@@ -232,12 +232,12 @@ button{cursor:pointer;font-family:var(--sans)}
 .rr.st-sent{border-color:rgba(63,185,80,.55);box-shadow:0 0 0 1px var(--green-dim)}
 .rr.st-error{border-color:rgba(248,81,73,.35)}
 .rr.st-sending{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber-dim)}
-.rt{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s2)}
+.rt{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s2);flex-wrap:wrap;row-gap:8px}
 .rnum{width:22px;height:22px;border-radius:6px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:11px;font-family:var(--mono);color:var(--t3);flex-shrink:0}
 .rnum.a{background:var(--blue-dim);color:var(--blue)}
 .rnum.d{background:var(--green-dim);color:var(--green)}
 .rnum.s{background:var(--amber-dim);color:var(--amber)}
-.reml{flex:1;font-size:12px;color:var(--t2);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reml{flex:1 1 180px;min-width:120px;font-size:12px;color:var(--t2);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .reml.empty{color:var(--t4)}
 .rst{font-size:10px;font-family:var(--mono);padding:3px 8px;border-radius:20px;flex-shrink:0;display:flex;align-items:center;gap:4px}
 .rst.idle{background:var(--s3);color:var(--t4)}
@@ -385,6 +385,14 @@ let TID = 10;
 // API base resolves from Vite env at build time; empty string => same-origin relative URLs.
 const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
+// 3-step follow-up cadence: stage 1 at day 3, stage 2 at day 6, stage 3 at day 10.
+// Index by current stage to compute next nextFollowUpAt offset.
+const FOLLOWUP_INTERVALS = [
+  3 * 24 * 60 * 60 * 1000,  // before stage 1 → wait 3 days
+  3 * 24 * 60 * 60 * 1000,  // stage 1 done → wait 3 more days to stage 2 (day 6)
+  4 * 24 * 60 * 60 * 1000,  // stage 2 done → wait 4 more days to stage 3 (day 10)
+];
+
 export default function HRAgent({ user, onSignOut }) {
   const [profile, setProfile] = useState({ name: "", replyTo: "", about: "", roleType: "", experience: "", location: "", currentRole: "", skills: [], linkedin: "", portfolio: "" });
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
@@ -393,7 +401,7 @@ export default function HRAgent({ user, onSignOut }) {
   const [drag, setDrag] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [recipients, setRecipients] = useState([
-    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }
+    { id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false, tailorResume: false }
   ]);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -406,6 +414,12 @@ export default function HRAgent({ user, onSignOut }) {
   const [history, setHistory] = useState([]);
   const [historyPreview, setHistoryPreview] = useState(null);
   const [scanReplyState, setScanReplyState] = useState({ running: false, current: 0, total: 0 });
+  const [inboxSearch, setInboxSearch] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [followUpTarget, setFollowUpTarget] = useState(null);  // history entry being followed-up
+  const [followUpDraft, setFollowUpDraft] = useState({ subject: "", body: "" });
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [followUpSending, setFollowUpSending] = useState(false);
   const [failedMails, setFailedMails] = useState([]);
   const [inboxPreview, setInboxPreview] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
@@ -462,7 +476,7 @@ export default function HRAgent({ user, onSignOut }) {
       setAttachments([]);
       setHistory([]);
       setFailedMails([]);
-      setRecipients([{ id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }]);
+      setRecipients([{ id: 1, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false, tailorResume: false }]);
       setNeedsOnboarding(false);
       setWaInbox([]);
       setWaGroups([]);
@@ -537,7 +551,30 @@ export default function HRAgent({ user, onSignOut }) {
       try {
         const hRef = collection(db, "users", user.uid, "history");
         const hSnap = await getDocs(query(hRef, orderBy("sentAt", "desc"), limit(200)));
-        setHistory(hSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        const loaded = hSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Backfill follow-up state for legacy entries (sent originals lacking the new fields).
+        // Schedules nextFollowUpAt as sentAt + 3 days from when they were originally sent.
+        const backfills = [];
+        for (const h of loaded) {
+          const isOriginalSent = h.status === "sent" && !h.isFollowUp;
+          const missingState = h.followUpStage === undefined || h.autoFollowUp === undefined;
+          if (isOriginalSent && missingState) {
+            h.followUpStage = 0;
+            h.nextFollowUpAt = (h.sentAt || Date.now()) + FOLLOWUP_INTERVALS[0];
+            h.autoFollowUp = true;
+            backfills.push(h);
+          }
+        }
+        setHistory(loaded);
+
+        // Persist backfilled state to Firestore (fire-and-forget, no UI block)
+        if (backfills.length) {
+          console.log(`[followup] backfilling state for ${backfills.length} legacy entries`);
+          Promise.all(
+            backfills.map(h => setDoc(doc(db, "users", user.uid, "history", h.id), h))
+          ).catch(err => console.error("Backfill error:", err));
+        }
       } catch (err) { console.error("History load error:", err); }
 
       // Load failed mails (awaiting retry)
@@ -583,18 +620,26 @@ export default function HRAgent({ user, onSignOut }) {
     catch { }
   };
 
-  const recordHistory = async (rec, status, errorMsg) => {
+  const recordHistory = async (rec, status, errorMsg, extra = {}) => {
+    const now = Date.now();
     const entry = {
-      sentAt: Date.now(),
+      sentAt: now,
       email: rec.email,
       company: rec.company || "",
       jobTitle: rec.jobTitle || "",
       subject: rec.subject || "",
       body: rec.body || "",
       note: rec.note || "",
-      status, // "sent" | "failed"
+      status,
       error: errorMsg || "",
       attachments: attachments.map(a => ({ name: a.name, filename: a.filename })),
+      // 3-step follow-up state: only enable for original sends that succeeded
+      ...(status === "sent" && !extra.isFollowUp ? {
+        followUpStage: 0,
+        nextFollowUpAt: now + FOLLOWUP_INTERVALS[0],
+        autoFollowUp: true,
+      } : {}),
+      ...extra,
     };
     const id = `${entry.sentAt}-${Math.random().toString(36).slice(2, 8)}`;
     setHistory(p => [{ id, ...entry }, ...p]);
@@ -602,6 +647,7 @@ export default function HRAgent({ user, onSignOut }) {
       try { await setDoc(doc(db, "users", user.uid, "history", id), entry); }
       catch (err) { console.error("History save error:", err); }
     }
+    return id;
   };
 
   const clearHistory = async () => {
@@ -617,6 +663,238 @@ export default function HRAgent({ user, onSignOut }) {
   };
 
   // Scan Gmail for replies to sent emails. Persists reply metadata to Firestore.
+  // Open follow-up modal for a sent history entry — generate an AI draft first.
+  const openFollowUp = async (h) => {
+    setFollowUpTarget(h);
+    setFollowUpDraft({ subject: h.subject.startsWith("Re:") ? h.subject : `Re: ${h.subject}`, body: "" });
+    setFollowUpLoading(true);
+    try {
+      const apiKey = apiKeys.claude || undefined;
+      const senderLines = [
+        `Name: ${profile.name || ""}`,
+        profile.currentRole && `Role: ${profile.currentRole}`,
+        profile.skills?.length && `Skills: ${profile.skills.slice(0, 5).join(", ")}`,
+      ].filter(Boolean).join("\n");
+      const daysAgo = Math.max(1, Math.floor((Date.now() - h.sentAt) / (1000 * 60 * 60 * 24)));
+      const prompt = `Write a brief, polite follow-up email to a recruiter who hasn't replied to my earlier application.
+
+CONTEXT:
+I sent the original ${daysAgo} day${daysAgo === 1 ? "" : "s"} ago. Original subject: "${h.subject}". Role: ${h.jobTitle || "the open position"}${h.company ? ` at ${h.company}` : ""}.
+
+MY PROFILE:
+${senderLines}
+
+ORIGINAL EMAIL I SENT:
+"""
+${h.body}
+"""
+
+RULES — DO NOT VIOLATE:
+1. Length: 70-120 words. Tight and respectful.
+2. Acknowledge the prior email gently (not pushy): "Just following up on my previous note about...".
+3. ONE sentence reaffirming genuine interest in the specific role.
+4. ONE concrete value-add line (mention a relevant skill/project not over-emphasized before).
+5. Close with low-pressure CTA: "Happy to share more or jump on a quick call when convenient."
+6. Sign-off with first + last name.
+7. Use the recipient's first name from email if obvious; otherwise no greeting name.
+8. NO buzzwords (passionate, leverage, rockstar). NO desperation.
+9. NEVER mention "second email" or "haven't heard back" — keep it gracious.
+
+Recipient email: ${h.email}
+
+Respond ONLY with valid JSON (no markdown):
+{"subject":"...","body":"..."}`;
+
+      const res = await fetch(`${API_BASE}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, modelType: "claude", apiKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+      const text = data.content?.map(i => i.text || "").join("") || "";
+      const clean = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+      setFollowUpDraft({ subject: parsed.subject || `Re: ${h.subject}`, body: parsed.body || "" });
+    } catch (e) {
+      showToast("Draft failed: " + e.message, "err");
+      setFollowUpDraft({ subject: `Re: ${h.subject}`, body: "" });
+    }
+    setFollowUpLoading(false);
+  };
+
+  // Auto-send a single scheduled follow-up using stage-specific AI prompt.
+  // Returns true on success, false on failure (caller decides whether to halt batch).
+  const sendScheduledFollowUp = async (h) => {
+    const gmailUser = (apiKeys.gmailUser || "").trim();
+    const gmailAppPassword = (apiKeys.gmailAppPassword || "").replace(/\s+/g, "");
+    if (!gmailUser || !gmailAppPassword) throw new Error("Gmail not connected");
+
+    const nextStage = (h.followUpStage ?? 0) + 1;
+    const apiKey = apiKeys.claude || undefined;
+
+    // 1. Generate stage-specific text
+    const r = await fetch(`${API_BASE}/generate-followup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { "x-anthropic-key": apiKey } : {}),
+      },
+      body: JSON.stringify({ profile, original: h, stage: nextStage, modelType: "claude" }),
+    });
+    const draft = await r.json();
+    if (!r.ok) throw new Error(draft.error || "Draft failed");
+
+    // 2. Send via /send (threaded if we have parent messageId)
+    const sendRes = await fetch(`${API_BASE}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: h.email,
+        subject: draft.subject || `Re: ${h.subject}`,
+        body: draft.body,
+        fromName: profile.name || undefined,
+        replyTo: profile.replyTo || gmailUser,
+        attachments: (h.attachments || []).map(a => ({ name: a.name, filename: a.filename })),
+        gmailUser,
+        gmailAppPassword,
+        inReplyTo: h.messageId || undefined,
+        references: h.messageId || undefined,
+      }),
+    });
+    const sendData = await sendRes.json();
+    if (!sendRes.ok || sendData.error) throw new Error(sendData.error || "Send failed");
+
+    // 3. Record new history entry for this follow-up
+    await recordHistory(
+      { email: h.email, company: h.company, jobTitle: h.jobTitle, subject: draft.subject, body: draft.body, note: h.note },
+      "sent",
+      null,
+      { messageId: sendData.messageId, parentMessageId: h.messageId, parentId: h.id, isFollowUp: true, followUpStageAt: nextStage }
+    );
+
+    // 4. Update parent entry's stage + next due date (or finalize if at last stage)
+    const nextNextAt = nextStage >= 3 ? null : Date.now() + FOLLOWUP_INTERVALS[nextStage];
+    const updatedParent = {
+      ...h,
+      followUpStage: nextStage,
+      lastFollowUpAt: Date.now(),
+      ...(nextNextAt ? { nextFollowUpAt: nextNextAt } : { autoFollowUp: false, nextFollowUpAt: null }),
+    };
+    setHistory(p => p.map(x => x.id === h.id ? updatedParent : x));
+    if (user) {
+      setDoc(doc(db, "users", user.uid, "history", h.id), updatedParent).catch(() => { });
+    }
+    return true;
+  };
+
+  // Send ALL currently-due follow-ups in sequence (paced 1s between).
+  const sendAllDueFollowUps = async () => {
+    if (!dueFollowUps.length) return;
+    const gmailUser = (apiKeys.gmailUser || "").trim();
+    if (!gmailUser || !apiKeys.gmailAppPassword) {
+      showToast("Connect Gmail in API Keys panel first", "err");
+      return;
+    }
+    let success = 0;
+    let failed = 0;
+    for (const h of dueFollowUps) {
+      try {
+        await sendScheduledFollowUp(h);
+        success++;
+        await new Promise(r => setTimeout(r, 1000)); // gentle pacing
+      } catch (e) {
+        console.error(`Follow-up to ${h.email} failed:`, e.message);
+        failed++;
+      }
+    }
+    showToast(`Sent ${success} follow-up${success !== 1 ? "s" : ""}${failed ? ` · ${failed} failed` : ""}`, success > 0 ? "ok" : "err");
+  };
+
+  // Toggle auto-follow-up off (pause sequence) for one entry
+  const pauseFollowUp = async (h) => {
+    const updated = { ...h, autoFollowUp: false };
+    setHistory(p => p.map(x => x.id === h.id ? updated : x));
+    if (user) setDoc(doc(db, "users", user.uid, "history", h.id), updated).catch(() => { });
+  };
+
+  // Skip current stage — advance counter without sending
+  const skipFollowUpStage = async (h) => {
+    const nextStage = (h.followUpStage ?? 0) + 1;
+    const nextNextAt = nextStage >= 3 ? null : Date.now() + FOLLOWUP_INTERVALS[nextStage];
+    const updated = {
+      ...h,
+      followUpStage: nextStage,
+      ...(nextNextAt ? { nextFollowUpAt: nextNextAt } : { autoFollowUp: false, nextFollowUpAt: null }),
+    };
+    setHistory(p => p.map(x => x.id === h.id ? updated : x));
+    if (user) setDoc(doc(db, "users", user.uid, "history", h.id), updated).catch(() => { });
+  };
+
+  const sendFollowUp = async () => {
+    const h = followUpTarget;
+    if (!h) return;
+    if (!followUpDraft.body.trim()) { showToast("Body is empty", "err"); return; }
+    const gmailUser = (apiKeys.gmailUser || "").trim();
+    const gmailAppPassword = (apiKeys.gmailAppPassword || "").replace(/\s+/g, "");
+    if (!gmailUser || !gmailAppPassword) {
+      showToast("Connect Gmail in API Keys panel first", "err");
+      return;
+    }
+
+    setFollowUpSending(true);
+    try {
+      const res = await fetch(`${API_BASE}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: h.email,
+          subject: followUpDraft.subject,
+          body: followUpDraft.body,
+          fromName: profile.name || undefined,
+          replyTo: profile.replyTo || gmailUser,
+          attachments: (h.attachments || []).map(a => ({ name: a.name, filename: a.filename })),
+          gmailUser,
+          gmailAppPassword,
+          inReplyTo: h.messageId || undefined,
+          references: h.messageId || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Send failed");
+
+      // Record as new history entry linked to parent
+      const merged = {
+        email: h.email,
+        company: h.company,
+        jobTitle: h.jobTitle,
+        subject: followUpDraft.subject,
+        body: followUpDraft.body,
+        note: h.note,
+      };
+      await recordHistory(merged, "sent", null, {
+        messageId: data.messageId,
+        parentMessageId: h.messageId,
+        parentId: h.id,
+        isFollowUp: true,
+      });
+
+      // Mark parent as "followed up"
+      const updatedParent = { ...h, followedUpAt: Date.now() };
+      setHistory(p => p.map(x => x.id === h.id ? updatedParent : x));
+      if (user) {
+        setDoc(doc(db, "users", user.uid, "history", h.id), updatedParent).catch(() => { });
+      }
+
+      showToast(`Follow-up sent → ${h.email}`, "ok");
+      setFollowUpTarget(null);
+      setFollowUpDraft({ subject: "", body: "" });
+    } catch (e) {
+      showToast("Follow-up failed: " + e.message, "err");
+    }
+    setFollowUpSending(false);
+  };
+
   const scanGmailReplies = async () => {
     if (!user) return;
     const token = sessionStorage.getItem(`gmail_token_${user.uid}`);
@@ -640,9 +918,10 @@ export default function HRAgent({ user, onSignOut }) {
         const u = updatedMap.get(h.id);
         if (u && u.replied && !h.replied) {
           newReplies++;
-          // Fire-and-forget persistence
-          setDoc(doc(db, "users", user.uid, "history", h.id), u).catch(() => { });
-          return u;
+          // Reply received → auto-stop follow-up sequence
+          const final = { ...u, autoFollowUp: false, nextFollowUpAt: null };
+          setDoc(doc(db, "users", user.uid, "history", h.id), final).catch(() => { });
+          return final;
         }
         return u || h;
       });
@@ -937,7 +1216,7 @@ export default function HRAgent({ user, onSignOut }) {
     await waFetch(`/wa/inbox/${item.id}/apply`, { method: "POST" });
     setWaInbox(p => p.filter(x => x.id !== item.id));
     removePersistedInbox(item.id);
-    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false };
+    const newRec = { id: TID++, email: item.email, jobTitle: item.jobTitle || "", company: item.company || "", note: item.snippet || "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false, tailorResume: false };
     setRecipients(p => [...p, newRec]);
     showToast(`Added ${item.email} to recipients`, "ok");
   };
@@ -957,29 +1236,61 @@ export default function HRAgent({ user, onSignOut }) {
     showToast(`Added ${pending.length} recipients`, "ok");
   };
 
-  // Skip inbox items only when the SAME email + SAME role has already been actioned.
-  // Same recruiter posting a different role later should still show up.
-  const itemKey = (e = "", t = "", n = "") => {
-    const email = e.toLowerCase().trim();
-    const role = (t || "").toLowerCase().trim();
-    const fallback = role || (n || "").toLowerCase().trim().slice(0, 80);
-    return `${email}::${fallback}`;
+  // Dedup logic:
+  // - If sender has applied to an email AND a clean role was tagged on both sides → key = email+role
+  //   (lets same recruiter's later DIFFERENT role still show up).
+  // - If role missing on either side (common with WhatsApp extraction) → fall back to
+  //   email-only — once you've sent to this address, don't show their stuff again.
+  const normRole = (s = "") => (s || "").toLowerCase().trim().replace(/\s+/g, " ");
+  const usedEmails = new Set();          // email-only skip set (when role missing)
+  const usedEmailRoles = new Set();      // email+role skip set (when role present)
+  const collect = (email, role) => {
+    const e = (email || "").toLowerCase().trim();
+    if (!e) return;
+    const r = normRole(role);
+    if (r && r.length >= 3) usedEmailRoles.add(`${e}::${r}`);
+    else usedEmails.add(e);
   };
-  const skippedKeys = new Set(
-    [
-      ...history.map(h => itemKey(h.email, h.jobTitle, h.subject || h.body)),
-      ...failedMails.map(f => itemKey(f.email, f.jobTitle, f.subject || f.body)),
-      ...recipients.map(r => itemKey(r.email, r.jobTitle, r.note)),
-    ].filter(k => k && !k.endsWith("::"))
-  );
-  const visibleInbox = waInbox.filter(x =>
-    x.status === "pending" && !skippedKeys.has(itemKey(x.email, x.jobTitle, x.snippet))
-  );
+  history.forEach(h => collect(h.email, h.jobTitle));
+  failedMails.forEach(f => collect(f.email, f.jobTitle));
+  recipients.forEach(r => collect(r.email, r.jobTitle));
+
+  const isDedupedOut = (x) => {
+    const e = (x.email || "").toLowerCase().trim();
+    if (!e) return false;
+    if (usedEmails.has(e)) return true;       // applied with no role → block any future from this email
+    const r = normRole(x.jobTitle);
+    if (r && r.length >= 3 && usedEmailRoles.has(`${e}::${r}`)) return true;
+    // If inbox item has NO clean role but we DID apply to this email with a specific role,
+    // still hide it — likely the same role surfacing without proper tagging.
+    if ((!r || r.length < 3) && Array.from(usedEmailRoles).some(k => k.startsWith(`${e}::`))) return true;
+    return false;
+  };
+
+  const matchesQ = (q, ...fields) => {
+    const needle = (q || "").toLowerCase().trim();
+    if (!needle) return true;
+    return fields.some(f => (f || "").toLowerCase().includes(needle));
+  };
+
+  const visibleInbox = waInbox
+    .filter(x => x.status === "pending" && !isDedupedOut(x))
+    .filter(x => matchesQ(inboxSearch, x.email, x.company, x.jobTitle, x.snippet, x.groupName));
   const pendingInboxCount = visibleInbox.length;
   const failedCount = failedMails.filter(r => r.status === "failed").length;
 
+  // Follow-ups due: sent (not follow-up itself), auto enabled, not replied, stage < 3, due date passed.
+  const dueFollowUps = history.filter(h =>
+    h.status === "sent" &&
+    !h.isFollowUp &&
+    h.autoFollowUp !== false &&
+    !h.replied &&
+    (h.followUpStage ?? 0) < 3 &&
+    h.nextFollowUpAt && Date.now() >= h.nextFollowUpAt
+  );
+
   const upd = (id, k, v) => setRecipients(p => p.map(r => r.id === id ? { ...r, [k]: v } : r));
-  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false }]);
+  const addRec = () => setRecipients(p => [...p, { id: TID++, email: "", jobTitle: "", company: "", note: "", status: "idle", statusMsg: "", subject: "", body: "", preferAi: "claude", mode: "apply", coverLetter: false, tailorResume: false }]);
   const rmRec = id => setRecipients(p => p.filter(r => r.id !== id));
 
   const generateEmail = async rec => {
@@ -1181,6 +1492,31 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     return { name: data.displayName, filename: data.filename };
   };
 
+  // Generate a per-job tailored resume PDF using the user's base resume as source.
+  // Returns an attachment descriptor; REPLACES the original resume attachment on send.
+  const generateTailoredResume = async (rec) => {
+    const apiKey = apiKeys.claude || undefined;
+    // Find a base resume in user's attachments (first PDF)
+    const baseResume = attachments.find(a => /\.pdf$/i.test(a.name || "") && !a.error);
+    const res = await fetch(`${API_BASE}/resume-tailor`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { "x-anthropic-key": apiKey } : {}),
+      },
+      body: JSON.stringify({
+        profile,
+        jobTitle: rec.jobTitle,
+        company: rec.company,
+        jobPosting: rec.note || "",
+        baseResumeFilename: baseResume?.filename || undefined,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Resume tailoring failed");
+    return { name: data.displayName, filename: data.filename, baseResumeName: baseResume?.name };
+  };
+
   const sendViaServer = async (rec) => {
     const gmailUser = (apiKeys.gmailUser || "").trim();
     const gmailAppPassword = (apiKeys.gmailAppPassword || "").replace(/\s+/g, "");
@@ -1189,6 +1525,21 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
 
     let allAttachments = attachments.map(a => ({ name: a.name, filename: a.filename }));
+
+    // If tailored resume requested, swap the base resume with the tailored PDF
+    if (rec.tailorResume) {
+      try {
+        const tailored = await generateTailoredResume(rec);
+        // Drop the base resume that was used as source, replace with tailored version
+        if (tailored.baseResumeName) {
+          allAttachments = allAttachments.filter(a => a.name !== tailored.baseResumeName);
+        }
+        allAttachments = [...allAttachments, { name: tailored.name, filename: tailored.filename }];
+      } catch (e) {
+        throw new Error(`Resume tailoring failed: ${e.message}`);
+      }
+    }
+
     if (rec.coverLetter) {
       try {
         const cl = await generateCoverLetter(rec);
@@ -1232,9 +1583,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const result = await generateEmail(r);
       const merged = { ...r, subject: result.subject, body: result.body };
-      await sendViaServer(merged);
+      const sendResult = await sendViaServer(merged);
       showToast(`Sent → ${r.email}`, "ok");
-      recordHistory(merged, "sent");
+      recordHistory(merged, "sent", null, { messageId: sendResult?.messageId });
       setFailedMails(p => p.filter(f => f.id !== r.id));
       removePersistedFailed(r.id);
     } catch (e) {
@@ -1262,9 +1613,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   const sendOne = async (r) => {
     upd(r.id, "status", "sending");
     try {
-      await sendViaServer(r);
+      const result = await sendViaServer(r);
       showToast(`Sent → ${r.email}`, "ok");
-      recordHistory(r, "sent");
+      recordHistory(r, "sent", null, { messageId: result?.messageId });
       setRecipients(p => p.filter(x => x.id !== r.id));
     } catch (e) {
       showToast(`Failed: ${e.message}`, "err");
@@ -1303,9 +1654,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       setRecipients(p => p.map(r => r.id === id ? { ...r, status: "sending" } : r));
       const mergedRec = { ...valid[i], subject: result.subject, body: result.body };
       try {
-        await sendViaServer(mergedRec);
+        const result = await sendViaServer(mergedRec);
         showToast(`Sent → ${valid[i].email}`, "ok");
-        recordHistory(mergedRec, "sent");
+        recordHistory(mergedRec, "sent", null, { messageId: result?.messageId });
         setRecipients(p => p.filter(r => r.id !== id));
       } catch (e) {
         showToast(`Send failed for ${valid[i].email}: ${e.message}`, "err");
@@ -1462,6 +1813,52 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           );
         })()}
 
+        {dueFollowUps.length > 0 && (
+          <div style={{
+            marginTop: 14,
+            padding: "12px 18px",
+            borderRadius: 12,
+            background: "linear-gradient(135deg, rgba(47,129,247,.1), rgba(163,113,247,.08))",
+            border: "1px solid rgba(47,129,247,.3)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            animation: "heroIn .5s cubic-bezier(.22,1,.36,1)",
+          }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 9,
+              background: "linear-gradient(135deg, var(--blue), var(--purple))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 16, flexShrink: 0,
+              boxShadow: "0 2px 12px rgba(47,129,247,.35)",
+            }}>↻</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-.2px" }}>
+                {dueFollowUps.length} follow-up{dueFollowUps.length !== 1 ? "s" : ""} due
+              </div>
+              <div style={{ fontSize: 11, color: "var(--t3)", fontFamily: "var(--mono)", marginTop: 1 }}>
+                Auto-drafted by AI · sends in same Gmail thread · stops if they reply
+              </div>
+            </div>
+            <button
+              onClick={() => setSideTab("history")}
+              style={{
+                padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                background: "var(--s3)", border: "1px solid var(--b2)", color: "var(--t2)", cursor: "pointer",
+              }}
+            >Review</button>
+            <button
+              onClick={sendAllDueFollowUps}
+              style={{
+                padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700, letterSpacing: ".2px",
+                background: "linear-gradient(135deg, var(--blue), #1a6fd4)",
+                border: "none", color: "#fff", cursor: "pointer",
+                boxShadow: "0 4px 12px rgba(47,129,247,.35)",
+              }}
+            >Send All ↻</button>
+          </div>
+        )}
+
         <div className="mg">
 
           {/* SIDEBAR */}
@@ -1613,14 +2010,30 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   </div>
                 </div>
                 <div className="pb">
+                  {history.length > 0 && (
+                    <input
+                      type="text"
+                      value={historySearch}
+                      onChange={e => setHistorySearch(e.target.value)}
+                      placeholder="🔍 Search email, company, role, subject, body..."
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={{ fontSize: 12, fontFamily: "var(--mono)", marginBottom: 4 }}
+                    />
+                  )}
                   {history.length === 0 ? (
                     <div className="hempty">
                       No sends yet.<br />
                       Every successful email will show up here.
                     </div>
+                  ) : history.filter(h => matchesQ(historySearch, h.email, h.company, h.jobTitle, h.subject, h.body, h.replySubject)).length === 0 ? (
+                    <div className="hempty">
+                      No matches for "<b>{historySearch}</b>"<br />
+                      <button onClick={() => setHistorySearch("")} style={{ marginTop: 8, fontSize: 11, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>Clear search</button>
+                    </div>
                   ) : (
                     <div className="hlist">
-                      {history.map(h => (
+                      {history.filter(h => matchesQ(historySearch, h.email, h.company, h.jobTitle, h.subject, h.body, h.replySubject)).map(h => (
                         <div
                           key={h.id}
                           className={`hitem ${h.status === "sent" ? "ok" : "err"}`}
@@ -1656,6 +2069,61 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                             )}
                             {h.attachments?.length > 0 && (
                               <span className="hi-att">📎 {h.attachments.length}</span>
+                            )}
+                            {h.status === "sent" && !h.replied && !h.isFollowUp && (
+                              (() => {
+                                const stage = h.followUpStage ?? 0;
+                                const isDone = stage >= 3 || !h.autoFollowUp;
+                                const isDue = h.nextFollowUpAt && Date.now() >= h.nextFollowUpAt;
+                                const dueIn = h.nextFollowUpAt ? h.nextFollowUpAt - Date.now() : 0;
+                                const dueLabel = dueIn > 0
+                                  ? `due in ${dueIn > 86400000 ? `${Math.ceil(dueIn / 86400000)}d` : `${Math.max(1, Math.round(dueIn / 3600000))}h`}`
+                                  : "due now";
+                                const bg = isDone ? "var(--s3)" : isDue ? "linear-gradient(135deg, rgba(47,129,247,.18), rgba(163,113,247,.14))" : "var(--blue-dim)";
+                                const color = isDone ? "var(--t3)" : "var(--blue)";
+                                const border = isDone ? "var(--b1)" : "rgba(47,129,247,.4)";
+                                const label = isDone
+                                  ? (h.autoFollowUp === false ? "✗ Stopped" : `✓ Sequence done (${stage}/3)`)
+                                  : isDue
+                                    ? `↻ Send FU ${stage + 1}/3`
+                                    : `Stage ${stage}/3 · ${dueLabel}`;
+                                return (
+                                  <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+                                    <button
+                                      onClick={e => { e.stopPropagation(); openFollowUp(h); }}
+                                      title={isDue ? "Send the next follow-up now" : "Open manual follow-up draft"}
+                                      style={{
+                                        padding: "2px 9px", fontSize: 9, fontFamily: "var(--mono)", fontWeight: 600,
+                                        borderRadius: 10, border: "1px solid", borderColor: border,
+                                        background: bg, color: color, cursor: "pointer",
+                                        letterSpacing: ".3px", whiteSpace: "nowrap",
+                                      }}
+                                    >{label}</button>
+                                    {!isDone && (
+                                      <>
+                                        <button
+                                          onClick={e => { e.stopPropagation(); skipFollowUpStage(h); }}
+                                          title="Skip this stage (advance counter without sending)"
+                                          style={{
+                                            padding: "2px 6px", fontSize: 9, fontFamily: "var(--mono)",
+                                            borderRadius: 8, border: "1px solid var(--b1)",
+                                            background: "var(--s3)", color: "var(--t4)", cursor: "pointer",
+                                          }}
+                                        >»</button>
+                                        <button
+                                          onClick={e => { e.stopPropagation(); pauseFollowUp(h); }}
+                                          title="Stop the sequence entirely"
+                                          style={{
+                                            padding: "2px 6px", fontSize: 9, fontFamily: "var(--mono)",
+                                            borderRadius: 8, border: "1px solid var(--b1)",
+                                            background: "var(--s3)", color: "var(--t4)", cursor: "pointer",
+                                          }}
+                                        >✗</button>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })()
                             )}
                           </div>
                         </div>
@@ -1887,10 +2355,26 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                   </div>
                 </div>
                 <div className="pb">
+                  {waInbox.length > 0 && (
+                    <input
+                      type="text"
+                      value={inboxSearch}
+                      onChange={e => setInboxSearch(e.target.value)}
+                      placeholder="🔍 Search email, company, role, posting..."
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={{ fontSize: 12, fontFamily: "var(--mono)", marginBottom: 4 }}
+                    />
+                  )}
                   {waInbox.length === 0 ? (
                     <div className="hempty">
                       No HR emails yet.<br />
                       Use <b>Discover</b>, <b>WA</b>, or <b>+ Add</b> to fill the inbox.
+                    </div>
+                  ) : visibleInbox.length === 0 ? (
+                    <div className="hempty">
+                      No matches for "<b>{inboxSearch}</b>"<br />
+                      <button onClick={() => setInboxSearch("")} style={{ marginTop: 8, fontSize: 11, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>Clear search</button>
                     </div>
                   ) : (
                     <div className="hlist">
@@ -2173,6 +2657,34 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                       <button className={`tab ${r.preferAi === "claude" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "claude")}>Claude</button>
                       <button className={`tab ${r.preferAi === "openai" ? "on" : ""}`} style={{ fontSize: 9 }} onClick={() => upd(r.id, "preferAi", "openai")}>ChatGPT</button>
                     </div>
+
+                    {/* Tailored Resume PDF toggle */}
+                    <button
+                      type="button"
+                      title={r.tailorResume ? "Resume will be tailored to this job" : "Generate a tailored resume for this role"}
+                      onClick={() => upd(r.id, "tailorResume", !r.tailorResume)}
+                      disabled={running}
+                      style={{
+                        height: 26,
+                        padding: "0 10px",
+                        fontSize: 10,
+                        fontFamily: "var(--mono)",
+                        fontWeight: 600,
+                        borderRadius: 6,
+                        border: "1px solid",
+                        borderColor: r.tailorResume ? "rgba(63,185,80,.5)" : "var(--b1)",
+                        background: r.tailorResume ? "var(--green-dim)" : "var(--bg)",
+                        color: r.tailorResume ? "var(--green)" : "var(--t3)",
+                        cursor: running ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        whiteSpace: "nowrap",
+                        marginRight: 6,
+                      }}
+                    >
+                      {r.tailorResume ? "🎯 Tailored" : "Tailor CV"}
+                    </button>
 
                     {/* Cover Letter PDF toggle */}
                     <button
@@ -2498,6 +3010,70 @@ Respond ONLY with valid JSON (no markdown, no code fences):
                 navigator.clipboard.writeText(`Email: ${inboxPreview.email}\nRole: ${inboxPreview.jobTitle}\nCompany: ${inboxPreview.company}\n\n${inboxPreview.snippet}`);
                 showToast("Copied to clipboard", "ok");
               }}>📋 Copy</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {followUpTarget && (
+        <div className="mbg" onClick={e => { if (e.target === e.currentTarget) setFollowUpTarget(null); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mhd">
+              <div className="mico">↻</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mto">
+                  Follow-up to <span>{followUpTarget.email}</span>
+                </div>
+                <div className="msub">{followUpTarget.company || followUpTarget.jobTitle || "Reminder nudge"}</div>
+                <div className="mto" style={{ marginTop: 4, fontSize: 10 }}>
+                  Original sent {fmtRelTime(followUpTarget.sentAt)} · "{followUpTarget.subject}"
+                  {followUpTarget.messageId && <span style={{ color: "var(--green)", marginLeft: 6 }}>· will thread in same conversation</span>}
+                </div>
+              </div>
+              <button className="mcls" onClick={() => setFollowUpTarget(null)}>×</button>
+            </div>
+
+            <div className="mbdy" style={{ padding: 0 }}>
+              <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, fontFamily: "var(--sans)" }}>
+                <div className="fl">
+                  <label className="flb">Subject</label>
+                  <input
+                    value={followUpDraft.subject}
+                    onChange={e => setFollowUpDraft(d => ({ ...d, subject: e.target.value }))}
+                    placeholder={`Re: ${followUpTarget.subject}`}
+                    disabled={followUpLoading || followUpSending}
+                  />
+                </div>
+                <div className="fl">
+                  <label className="flb">
+                    Body
+                    {followUpLoading && <span style={{ marginLeft: 8, color: "var(--blue)", fontSize: 10 }}><span className="spin">⟳</span> drafting…</span>}
+                  </label>
+                  <textarea
+                    value={followUpDraft.body}
+                    onChange={e => setFollowUpDraft(d => ({ ...d, body: e.target.value }))}
+                    placeholder={followUpLoading ? "AI is drafting your follow-up..." : "Edit the draft or write your own"}
+                    style={{ minHeight: 220, fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.65 }}
+                    disabled={followUpLoading || followUpSending}
+                  />
+                  <div className="flh" style={{ marginTop: 4 }}>
+                    {(followUpDraft.body.match(/\S+/g) || []).length} words ·
+                    {(followUpTarget.attachments?.length || 0) > 0 ? ` will re-attach ${followUpTarget.attachments.length} file(s)` : " no attachments"}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mftr">
+              <button className="sb-btn sbcopy" onClick={() => setFollowUpTarget(null)} disabled={followUpSending}>Cancel</button>
+              <button
+                className="sb-btn sbsend"
+                onClick={sendFollowUp}
+                disabled={followUpLoading || followUpSending || !followUpDraft.body.trim()}
+                style={{ marginLeft: "auto" }}
+              >
+                {followUpSending ? <><span className="spin">⟳</span> Sending...</> : "↻ Send Follow-up"}
+              </button>
             </div>
           </div>
         </div>
